@@ -1,0 +1,163 @@
+name: Build AN7581 PonWrt
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: '设备机型'
+        required: true
+        default: 'fiberhome_hg5585f-cu'
+        type: choice
+        options:
+          - fiberhome_hg5585f-cu
+          - fiberhome_hg5585f-ct
+          - fiberhome_hg5382a
+          - gemtek_xg2010g
+          - nokia_xg-040g-md-ubi
+          - nokia_xg-040g-tf-ubi
+          - unionman_ung00a
+          - znxt_zn504xg-d
+          - znxt_zn515xg-d
+      clean_cache:
+        description: '清理工具链缓存后重新构建'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REPO_URL: https://github.com/pbs05/ponwrt.git
+  REPO_BRANCH: main
+  DIY_P1_SH: diy-part1.sh
+  DIY_P2_SH: diy-part2.sh
+  UPLOAD_RELEASE: true
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+    - name: 显示磁盘空间
+      run: df -hT ${{ github.workspace }}
+
+    - name: 安装编译依赖
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install \
+          build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+          gettext git libncurses5-dev libssl-dev python3-pyelftools python3-setuptools \
+          rsync swig unzip zlib1g-dev file wget jq qemu-utils
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+
+    - name: 拉取 PonWrt 源码
+      run: |
+        git clone --depth 1 --single-branch -b $REPO_BRANCH $REPO_URL openwrt
+        cd openwrt
+        echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+    - name: 补齐 PON feeds（diy-part1.sh）
+      run: |
+        cp $GITHUB_WORKSPACE/$DIY_P1_SH openwrt/$DIY_P1_SH
+        cd openwrt
+        chmod +x $DIY_P1_SH
+        ./$DIY_P1_SH
+
+    - name: 更新并安装 feeds
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+
+    - name: 载入 .config 与 diy-part2.sh
+      run: |
+        cd openwrt
+        cp "$GITHUB_WORKSPACE/configs/an7581-${{ inputs.device }}.config" .config
+        cp $GITHUB_WORKSPACE/$DIY_P2_SH diy-part2.sh
+        chmod +x diy-part2.sh
+        ./diy-part2.sh
+        make defconfig
+
+    - name: 确认目标机型
+      run: |
+        cd openwrt
+        echo "===== 本机构建的机型 ====="
+        grep -E "^(CONFIG_TARGET_BOARD|CONFIG_TARGET_SUBTARGET)=" .config
+        grep -E "^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y" .config
+        echo "===== PON 组件 ====="
+        grep -E "^CONFIG_PACKAGE_(kmod-airoha-(xpon|pon-frontend|en7572|paged-bosa)|airoha-(pond|ponctl|pon-debug)|luci-app-(pon|iptv))=" .config
+
+    - name: 缓存工具链
+      if: inputs.clean_cache != true
+      uses: actions/cache@v4
+      with:
+        path: openwrt/staging_dir
+        key: ponwrt-an7581-toolchain-${{ env.COMMIT_HASH }}
+        restore-keys: ponwrt-an7581-toolchain-
+
+    - name: 下载软件包
+      run: |
+        cd openwrt
+        make download -j8
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: 编译固件
+      run: |
+        cd openwrt
+        make -j$(nproc) 2>&1 | tee build.log
+        if grep -qiE '^make.*(error|Error [0-9])' build.log; then
+          echo "STATUS=error" >> $GITHUB_ENV
+        else
+          echo "STATUS=success" >> $GITHUB_ENV
+        fi
+        echo "FIRMWARE_PATH=$(pwd)/bin/targets/airoha/an7581" >> $GITHUB_ENV
+
+    - name: 编译失败时输出日志尾部
+      if: env.STATUS == 'error'
+      run: |
+        echo "========== build.log 最后 300 行 =========="
+        tail -n 300 $FIRMWARE_PATH/../../../../build.log
+
+    - name: 上传编译日志
+      if: env.STATUS == 'error'
+      uses: actions/upload-artifact@v4
+      with:
+        name: an7581-${{ inputs.device }}-build-log
+        path: openwrt/build.log
+
+    - name: 整理固件
+      if: env.STATUS == 'success'
+      run: |
+        cd $FIRMWARE_PATH
+        echo "DATE_CODE=$(date +"%Y%m%d-%H%M")" >> $GITHUB_ENV
+        echo "===== 产物 ====="
+        ls -lh
+        sha256sum * > sha256sums
+
+    - name: 上传固件到 Artifacts
+      if: env.STATUS == 'success'
+      uses: actions/upload-artifact@v4
+      with:
+        name: an7581-${{ inputs.device }}-${{ env.DATE_CODE }}
+        path: ${{ env.FIRMWARE_PATH }}
+
+    - name: 发布到 Release
+      if: env.STATUS == 'success' && env.UPLOAD_RELEASE == 'true'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: an7581-${{ inputs.device }}-${{ env.DATE_CODE }}
+        files: ${{ env.FIRMWARE_PATH }}/*
+        body: |
+          AN7581 PonWrt 固件
+
+          - 机型：${{ inputs.device }}
+          - 源码：pbs05/ponwrt @ ${{ env.COMMIT_HASH }}
+          - 内核：6.18
+          - PON：airoha-pond / ponctl / pon-debug / luci-app-pon / luci-app-iptv
+          - 光器件驱动：见所选配置的注释第 2 段
