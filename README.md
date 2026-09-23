@@ -92,26 +92,6 @@ make -j$(nproc)
 | 中兴 ZN504XG-D | `znxt_zn504xg-d` | `kmod-airoha-en7572` |
 | 中兴 ZN515XG-D | `znxt_zn515xg-d` | `kmod-airoha-en7572` |
 
-## 已修的问题（排查记录）
-
-| 现象 | 原因 | 修复 |
-|---|---|---|
-| `cp: cannot stat '.../diy-part1.sh': No such file or directory` | 缺 `actions/checkout`，workspace 是空目录 | 第一步补 `actions/checkout@v4`；diy 脚本改为找不到就跳过 |
-| 分支 clone 失败 | `REPO_BRANCH` 写成 `main`，ponwrt 只有 `master` | 分支改为 `repo_branch` 输入项，默认 `master`，clone 前 `git ls-remote` 校验 |
-| 配置项被静默丢弃 | 符号名在本 target 不存在（如 `kmod-sched-fq_codel`、turboacc 系列） | 已按 ponwrt 实际符号表清理掉 4 个无效符号 |
-| 失败时拿不到日志 | `STATUS` 未初始化、日志路径靠相对跳转 | 编译前预置 `STATUS=error`，日志统一走 `github.workspace` 路径，`always()` 上传 |
-| `sha256sum *` 报 "Is a directory" 导致步骤失败 | 产物目录里混有子目录 | 改为 `find -maxdepth 1 -type f` 只对文件算校验和 |
-
-## 常见构建错误
-
-**`cp: cannot stat '/home/runner/work/.../diy-part1.sh': No such file or directory`**
-
-原因是工作流缺少 `actions/checkout` 步骤，`$GITHUB_WORKSPACE` 是空目录。新版工作流已在第一步加了 `actions/checkout@v4`，并把 diy 脚本改成可选（找不到就跳过并打 warning）。
-
-同时确认推送时没有漏文件：仓库根目录要有 `diy-part1.sh`、`diy-part2.sh`，`configs/` 下要有 9 份 `.config`，`.github/workflows/` 下要有 yml。隐藏目录 `.github` 容易在复制时漏掉。
-
-## 分支与源码
-
 仓库 `pbs05/ponwrt` 只有 1 个分支 **`master`**（无 `main`），最新提交 `18d7b41`。`REPO_URL` 在 `.github/workflows/build-an7581.yml` 的 `env` 里硬编码为 `https://github.com/pbs05/ponwrt.git`，想换成自己的 fork 改这一行即可。
 
 分支通过 `repo_branch` 输入项选择，默认 `master`。克隆前会先用 `git ls-remote --heads` 校验分支是否存在，填错时日志会打印该仓库实际可用的分支列表，不会默默卡住。
