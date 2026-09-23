@@ -25,9 +25,25 @@ GitHub Actions 自动编译 Airoha AN7581 PON 设备固件，源码 `pbs05/ponwr
 ## 用法
 
 1. 新建 GitHub 仓库，把本目录内容整个推上去（`.github/` 开头的目录别漏）。
-2. Actions → **Build AN7581 PonWrt** → **Run workflow**，在 `device` 下拉里选机型。
+2. Actions → **Build AN7581 PonWrt** → **Run workflow**：
+   - `device`：机型，9 选 1，默认 `fiberhome_hg5585f-cu`
+   - `repo_branch`：源码分支，默认 **`master`**（ponwrt 的默认分支是 master，不是 main），可填自己 fork 的分支名
+   - `clean_cache`：勾选则忽略工具链缓存，全量重编
 3. 约 1–2 小时后，Actions 页面右上角 Artifacts 下载固件；也会自动打 tag 发 Release。
 4. 产物在 `bin/targets/airoha/an7581/`。
+
+## defconfig 与构建校验
+
+工作流**已包含 `make defconfig`**（在「载入 .config 与 diy-part2.sh」步骤末尾），精简配置必须经它展开成完整 `.config` 才能编译。
+
+defconfig 之后还有一步「校验 defconfig 展开结果」，会硬检查：
+
+- 目标机型数量恰好为 1
+- 光器件驱动 `en7572` / `paged-bosa` 恰好开一个
+- PON 必选包全部存在：`kmod-airoha-xpon`、`kmod-airoha-pon-frontend`、`airoha-pond`、`airoha-ponctl`、`airoha-pon-debug`、`luci-app-pon`、`luci-app-iptv`
+  - 包名写错时 kconfig 会**静默丢弃**，这一步能把它兜住，几十秒就报错，不用等 1–2 小时
+
+任一项不满足则直接失败退出。
 
 本地编译：
 
@@ -54,6 +70,12 @@ make -j$(nproc)
 | 广东联动 UNG00A | `unionman_ung00a` | `kmod-airoha-en7572` |
 | 中兴 ZN504XG-D | `znxt_zn504xg-d` | `kmod-airoha-en7572` |
 | 中兴 ZN515XG-D | `znxt_zn515xg-d` | `kmod-airoha-en7572` |
+
+## 分支与源码
+
+`REPO_URL` 在 `.github/workflows/build-an7581.yml` 的 `env` 里硬编码为 `https://github.com/pbs05/ponwrt.git`，想换成自己的 fork 改这一行即可。
+
+分支通过 `repo_branch` 输入项选择，默认 `master`。克隆前会先用 `git ls-remote --heads` 校验分支是否存在，填错时日志会打印该仓库实际可用的分支列表，不会默默卡住。
 
 ## 配置格式说明
 
