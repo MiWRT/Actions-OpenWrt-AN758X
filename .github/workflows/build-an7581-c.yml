@@ -1,4 +1,4 @@
-name: Build AN7581
+name: Build AN7581 PonWrt
 
 on:
   workflow_dispatch:
@@ -18,6 +18,11 @@ on:
           - unionman_ung00a
           - znxt_zn504xg-d
           - znxt_zn515xg-d
+      repo_branch:
+        description: '源码分支（ponwrt 默认分支是 master）'
+        required: false
+        default: 'master'
+        type: string
       clean_cache:
         description: '清理工具链缓存后重新构建'
         required: false
@@ -26,7 +31,7 @@ on:
 
 env:
   REPO_URL: https://github.com/pbs05/ponwrt.git
-  REPO_BRANCH: master
+  REPO_BRANCH: ${{ inputs.repo_branch || 'master' }}
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   UPLOAD_RELEASE: true
@@ -58,7 +63,17 @@ jobs:
 
     - name: 拉取 PonWrt 源码
       run: |
-        git clone --depth 1 --single-branch -b $REPO_BRANCH $REPO_URL openwrt
+        BRANCH="${{ inputs.repo_branch || 'master' }}"
+        echo "仓库：$REPO_URL"
+        echo "分支：$BRANCH"
+        # 先确认分支存在，填错时把实际可用分支列出来
+        if ! git ls-remote --heads "$REPO_URL" "$BRANCH" | grep -q .; then
+          echo "::error::分支 '$BRANCH' 不存在"
+          echo "该仓库可用分支："
+          git ls-remote --heads "$REPO_URL" | sed 's#.*refs/heads/##' | sort
+          exit 1
+        fi
+        git clone --depth 1 --single-branch -b "$BRANCH" "$REPO_URL" openwrt
         cd openwrt
         echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
@@ -84,14 +99,42 @@ jobs:
         ./diy-part2.sh
         make defconfig
 
-    - name: 确认目标机型
+    - name: 校验 defconfig 展开结果
       run: |
         cd openwrt
-        echo "===== 本机构建的机型 ====="
+        echo "===== 展开后的 .config 行数 ====="
+        wc -l .config
+        echo "===== 目标 ====="
         grep -E "^(CONFIG_TARGET_BOARD|CONFIG_TARGET_SUBTARGET)=" .config
         grep -E "^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y" .config
-        echo "===== PON 组件 ====="
-        grep -E "^CONFIG_PACKAGE_(kmod-airoha-(xpon|pon-frontend|en7572|paged-bosa)|airoha-(pond|ponctl|pon-debug)|luci-app-(pon|iptv))=" .config
+
+        fail=0
+        # 机型必须恰好一个
+        n=$(grep -cE "^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y" .config || true)
+        [ "$n" = "1" ] || { echo "::error::目标机型数量异常：$n"; fail=1; }
+
+        # 光器件驱动：必须恰好开一个
+        a=$(grep -c "^CONFIG_PACKAGE_kmod-airoha-en7572=y" .config || true)
+        b=$(grep -c "^CONFIG_PACKAGE_kmod-airoha-paged-bosa=y" .config || true)
+        echo "光器件：en7572=$a paged-bosa=$b"
+        [ "$((a+b))" = "1" ] || { echo "::error::光器件驱动应恰好开一个，当前 en7572=$a paged-bosa=$b"; fail=1; }
+
+        # PON 必选组件（package 名写错时 kconfig 会静默丢弃，这里兜住）
+        for p in kmod-airoha-xpon kmod-airoha-pon-frontend \
+                 airoha-pond airoha-ponctl airoha-pon-debug \
+                 luci-app-pon luci-app-iptv; do
+          if grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
+            echo "  [OK] $p"
+          else
+            echo "::error::缺失或被丢弃：$p（feeds 未装到 / 包名不对）"
+            fail=1
+          fi
+        done
+
+        echo "===== PON 组件实际状态 ====="
+        grep -E "^CONFIG_PACKAGE_(kmod-airoha-(xpon|pon-frontend|en7572|paged-bosa)|airoha-(pond|ponctl|pon-debug)|luci-app-(pon|iptv))=" .config || true
+
+        [ "$fail" = "0" ] || exit 1
 
     - name: 缓存工具链
       if: inputs.clean_cache != true
@@ -157,7 +200,7 @@ jobs:
           AN7581 PonWrt 固件
 
           - 机型：${{ inputs.device }}
-          - 源码：pbs05/ponwrt @ ${{ env.COMMIT_HASH }}
+          - 源码：${{ env.REPO_URL }} 分支 ${{ inputs.repo_branch }} @ ${{ env.COMMIT_HASH }}
           - 内核：6.18
           - PON：airoha-pond / ponctl / pon-debug / luci-app-pon / luci-app-iptv
           - 光器件驱动：见所选配置的注释第 2 段
