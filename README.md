@@ -29,6 +29,16 @@ GitHub Actions 自动编译 Airoha AN7581 PON 设备固件，源码 `pbs05/ponwr
 3. 约 1–2 小时后，Actions 页面右上角 Artifacts 下载固件；也会自动打 tag 发 Release。
 4. 产物在 `bin/targets/airoha/an7581/`。
 
+本地编译：
+
+```bash
+git clone https://github.com/pbs05/ponwrt.git && cd ponwrt
+./scripts/feeds update -a && ./scripts/feeds install -a
+cp configs/an7581-fiberhome_hg5585f-cu.config .config
+make defconfig          # 精简配置必须跑这一步展开
+make -j$(nproc)
+```
+
 ## 机型与光器件驱动
 
 光器件驱动两颗互斥，已按硬件写进每份配置，无需再改：
@@ -45,16 +55,31 @@ GitHub Actions 自动编译 Airoha AN7581 PON 设备固件，源码 `pbs05/ponwr
 | 中兴 ZN504XG-D | `znxt_zn504xg-d` | `kmod-airoha-en7572` |
 | 中兴 ZN515XG-D | `znxt_zn515xg-d` | `kmod-airoha-en7572` |
 
-## 每份配置里都带了什么
+## 配置格式说明
 
-配置末尾有 6 段分类注释（`#` 开头，不影响编译），逐项标注 `[内置 =y]` / `[模块 =m]` / `[未启用]`：
+`configs/*.config` 是**精简配置（diffconfig）**：只列出相对 target 默认值有改动、或需要显式指定的项，其余交给 `make defconfig` 按 target 默认展开。
 
-1. **PON 内核驱动** — `kmod-airoha-xpon`（PON MAC）、`kmod-airoha-pon-frontend`（BOSA 抽象层 + DDM）
-2. **光器件驱动** — 按机型二选一，注释里写明本机型选了哪颗
-3. **PON 用户态** — `airoha-pond`（OMCI/OAM 主守护）、`airoha-ponctl`（光功率/温度查询）、`airoha-pon-debug`（抓包诊断）
-4. **LuCI 界面** — `luci-app-pon`（板级身份编辑）、`luci-app-iptv`（IPTV 桥接）及中文包
-5. **硬件卸载** — NPU 固件、`kmod-nft-offload`、`kmod-nf-conntrack-bridge`
-6. **PHY / WiFi** — EN8811H 2.5G、RTL826x 固件、MT7916 WiFi 与 EEPROM
+每份约 209 行（全量展开后是 9000 行）。好处是改起来一眼能看全，坏处是**不能直接用**——必须先跑 `make defconfig`。工作流里已经包含这一步，本地编译也要记得跑。
+
+分 11 段，和 MT798X 那套 `.config` 的组织方式一致：
+
+| 段 | 内容 |
+|---|---|
+| DEVICES | 目标机型 profile |
+| 基础构建选项 | target / 内核 6.18 / rootfs / debugfs |
+| 1. PON 内核驱动 | `kmod-airoha-xpon`、`kmod-airoha-pon-frontend` |
+| 2. 光器件驱动 | 按机型二选一，注释写明本机型选了哪颗 |
+| 3. PON 用户态 | `airoha-pond`（OMCI/OAM 主守护）、`airoha-ponctl`（光功率/温度查询）、`airoha-pon-debug`（抓包诊断） |
+| 4. PON/IPTV LuCI | `luci-app-pon`（板级身份编辑）、`luci-app-iptv`（IPTV 桥接）+ 中文包 |
+| 5. 硬件卸载 | NPU 固件、`kmod-nft-offload`、`kmod-nf-conntrack-bridge` |
+| 6. 有线 PHY / WiFi | EN8811H 2.5G、RTL826x 固件、MT7916、wpad-openssl、fitblk |
+| 7. LuCI 界面 | luci + 各 mod + argon 主题 + 中文包 |
+| 8. 基础服务与工具 | dnsmasq-full、pppoe、iperf3、tcpdump、i2c-tools、uboot-envtools 等 |
+| 9. 存储 / USB / eMMC / M.2 | **默认全部注释掉**，按需取消注释 |
+| 10. 网络 / 内核杂项 | cgroup、BBR、nft/ipt 增强、zram |
+| 11. MISC | 编译强化选项、fastpath 取舍 |
+
+每段里的 `=y` / `=m` 后面带中文行内注释，说明这个包干什么用。
 
 ## PON 协议支持情况
 
