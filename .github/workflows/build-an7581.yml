@@ -18,6 +18,11 @@ on:
           - unionman_ung00a
           - znxt_zn504xg-d
           - znxt_zn515xg-d
+      repo_branch:
+        description: '源码分支（ponwrt 默认分支是 master）'
+        required: false
+        default: 'master'
+        type: string
       clean_cache:
         description: '清理工具链缓存后重新构建'
         required: false
@@ -26,7 +31,6 @@ on:
 
 env:
   REPO_URL: https://github.com/pbs05/ponwrt.git
-  REPO_BRANCH: master
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   UPLOAD_RELEASE: true
@@ -39,8 +43,16 @@ jobs:
       contents: write
 
     steps:
-    - name: 显示磁盘空间
-      run: df -hT ${{ github.workspace }}
+    - name: 检出本仓库
+      uses: actions/checkout@v4
+
+    - name: 环境自检
+      run: |
+        df -hT ${{ github.workspace }}
+        echo "===== 本仓库检出内容 ====="
+        ls -la ${{ github.workspace }}
+        echo "===== configs/ ====="
+        ls -la ${{ github.workspace }}/configs 2>/dev/null || echo "::warning::configs/ 目录不存在"
 
     - name: 安装编译依赖
       env:
@@ -58,16 +70,32 @@ jobs:
 
     - name: 拉取 PonWrt 源码
       run: |
-        git clone --depth 1 --single-branch -b $REPO_BRANCH $REPO_URL openwrt
+        BRANCH="${{ inputs.repo_branch || 'master' }}"
+        echo "仓库：$REPO_URL"
+        echo "分支：$BRANCH"
+        # 先确认分支存在，填错时把实际可用分支列出来
+        if ! git ls-remote --heads "$REPO_URL" "$BRANCH" | grep -q .; then
+          echo "::error::分支 '$BRANCH' 不存在"
+          echo "该仓库可用分支："
+          git ls-remote --heads "$REPO_URL" | sed 's#.*refs/heads/##' | sort
+          exit 1
+        fi
+        git clone --depth 1 --single-branch -b "$BRANCH" "$REPO_URL" openwrt
         cd openwrt
         echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
     - name: 补齐 PON feeds（diy-part1.sh）
       run: |
-        cp $GITHUB_WORKSPACE/$DIY_P1_SH openwrt/$DIY_P1_SH
         cd openwrt
-        chmod +x $DIY_P1_SH
-        ./$DIY_P1_SH
+        if [ -f "$GITHUB_WORKSPACE/$DIY_P1_SH" ]; then
+          cp "$GITHUB_WORKSPACE/$DIY_P1_SH" ./
+          chmod +x "$DIY_P1_SH"
+          ./$DIY_P1_SH
+        else
+          echo "::warning::未找到 $DIY_P1_SH，跳过；使用源码自带 feeds.conf.default"
+        fi
+        echo "===== feeds.conf.default ====="
+        cat feeds.conf.default
 
     - name: 更新并安装 feeds
       run: |
@@ -78,20 +106,59 @@ jobs:
     - name: 载入 .config 与 diy-part2.sh
       run: |
         cd openwrt
-        cp "$GITHUB_WORKSPACE/configs/an7581-${{ inputs.device }}.config" .config
-        cp $GITHUB_WORKSPACE/$DIY_P2_SH diy-part2.sh
-        chmod +x diy-part2.sh
-        ./diy-part2.sh
+        CFG="$GITHUB_WORKSPACE/configs/an7581-${{ inputs.device }}.config"
+        if [ -f "$CFG" ]; then
+          cp "$CFG" .config
+          echo "已载入：$CFG"
+        else
+          echo "::warning::未找到 $CFG，回退到源码自带 configs/an7581.config"
+          cp configs/an7581.config .config
+        fi
+        if [ -f "$GITHUB_WORKSPACE/$DIY_P2_SH" ]; then
+          cp "$GITHUB_WORKSPACE/$DIY_P2_SH" diy-part2.sh
+          chmod +x diy-part2.sh
+          ./diy-part2.sh
+        else
+          echo "::warning::未找到 $DIY_P2_SH，跳过"
+        fi
         make defconfig
 
-    - name: 确认目标机型
+    - name: 校验 defconfig 展开结果
       run: |
         cd openwrt
-        echo "===== 本机构建的机型 ====="
-        grep -E "^(CONFIG_TARGET_BOARD|CONFIG_TARGET_SUBTARGET)=" .config
-        grep -E "^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y" .config
-        echo "===== PON 组件 ====="
-        grep -E "^CONFIG_PACKAGE_(kmod-airoha-(xpon|pon-frontend|en7572|paged-bosa)|airoha-(pond|ponctl|pon-debug)|luci-app-(pon|iptv))=" .config
+        echo "===== 展开后的 .config 行数 ====="
+        wc -l .config
+        echo "===== 目标 ====="
+        grep -E "^(CONFIG_TARGET_BOARD|CONFIG_TARGET_SUBTARGET)=" .config || true
+        grep -E "^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y" .config || true
+
+        fail=0
+        # 机型必须恰好一个
+        n=$(grep -cE "^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y" .config || true)
+        [ "$n" = "1" ] || { echo "::error::目标机型数量异常：$n"; fail=1; }
+
+        # 光器件驱动：必须恰好开一个
+        a=$(grep -c "^CONFIG_PACKAGE_kmod-airoha-en7572=y" .config || true)
+        b=$(grep -c "^CONFIG_PACKAGE_kmod-airoha-paged-bosa=y" .config || true)
+        echo "光器件：en7572=$a paged-bosa=$b"
+        [ "$((a+b))" = "1" ] || { echo "::error::光器件驱动应恰好开一个，当前 en7572=$a paged-bosa=$b"; fail=1; }
+
+        # PON 必选组件（package 名写错时 kconfig 会静默丢弃，这里兜住）
+        for p in kmod-airoha-xpon kmod-airoha-pon-frontend \
+                 airoha-pond airoha-ponctl airoha-pon-debug \
+                 luci-app-pon luci-app-iptv; do
+          if grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
+            echo "  [OK] $p"
+          else
+            echo "::error::缺失或被丢弃：$p（feeds 未装到 / 包名不对）"
+            fail=1
+          fi
+        done
+
+        echo "===== PON 组件实际状态 ====="
+        grep -E "^CONFIG_PACKAGE_(kmod-airoha-(xpon|pon-frontend|en7572|paged-bosa)|airoha-(pond|ponctl|pon-debug)|luci-app-(pon|iptv))=" .config || true
+
+        [ "$fail" = "0" ] || exit 1
 
     - name: 缓存工具链
       if: inputs.clean_cache != true
@@ -110,35 +177,43 @@ jobs:
     - name: 编译固件
       run: |
         cd openwrt
+        echo "STATUS=error" >> $GITHUB_ENV
+        echo "FIRMWARE_PATH=$(pwd)/bin/targets/airoha/an7581" >> $GITHUB_ENV
         make -j$(nproc) 2>&1 | tee build.log
-        if grep -qiE '^make.*(error|Error [0-9])' build.log; then
+        # 只看 make 自己报的错，避免源码里出现 "error" 字样被误判
+        if grep -qiE '^make[^:]*: \*\*\*|Error [0-9]+$' build.log; then
           echo "STATUS=error" >> $GITHUB_ENV
         else
           echo "STATUS=success" >> $GITHUB_ENV
         fi
-        echo "FIRMWARE_PATH=$(pwd)/bin/targets/airoha/an7581" >> $GITHUB_ENV
 
     - name: 编译失败时输出日志尾部
       if: env.STATUS == 'error'
       run: |
         echo "========== build.log 最后 300 行 =========="
-        tail -n 300 $FIRMWARE_PATH/../../../../build.log
+        tail -n 300 "${{ github.workspace }}/openwrt/build.log" || true
+        echo "========== 错误行 =========="
+        grep -iE "error|Error [0-9]" "${{ github.workspace }}/openwrt/build.log" | head -50 || true
 
     - name: 上传编译日志
-      if: env.STATUS == 'error'
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: an7581-${{ inputs.device }}-build-log
         path: openwrt/build.log
+        if-no-files-found: ignore
 
     - name: 整理固件
       if: env.STATUS == 'success'
       run: |
-        cd $FIRMWARE_PATH
+        cd "$FIRMWARE_PATH" || { echo "::error::产物目录不存在：$FIRMWARE_PATH"; exit 1; }
         echo "DATE_CODE=$(date +"%Y%m%d-%H%M")" >> $GITHUB_ENV
         echo "===== 产物 ====="
         ls -lh
-        sha256sum * > sha256sums
+        # 只对普通文件算校验和，避免子目录导致 sha256sum 退出码非 0
+        find . -maxdepth 1 -type f ! -name sha256sums -printf '%f\n' | sort | xargs -r sha256sum > sha256sums
+        echo "===== sha256sums ====="
+        cat sha256sums
 
     - name: 上传固件到 Artifacts
       if: env.STATUS == 'success'
@@ -157,7 +232,7 @@ jobs:
           AN7581 PonWrt 固件
 
           - 机型：${{ inputs.device }}
-          - 源码：pbs05/ponwrt @ ${{ env.COMMIT_HASH }}
+          - 源码：${{ env.REPO_URL }} 分支 ${{ inputs.repo_branch }} @ ${{ env.COMMIT_HASH }}
           - 内核：6.18
           - PON：airoha-pond / ponctl / pon-debug / luci-app-pon / luci-app-iptv
           - 光器件驱动：见所选配置的注释第 2 段
