@@ -35,9 +35,18 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 
 ## configs 说明
 
-每个机型一份 `configs/<profile>.config`，统一为**精简 diffconfig**（约 440 行），只写与 ponwrt 官方
-`configs/an7581.config` / `an7583.config` 基座的差异，流程里由 `Generate toolchain cache key` 步骤
-`make defconfig` 展开成完整 `.config`。
+每个机型一份 `configs/<profile>.config`，统一为**精简 diffconfig**（约 450 行），只写与 ponwrt 官方
+`configs/an7581.config` / `an7583.config` 基座的差异。
+
+⚠️ **流程采用「基座打底 + 差异追加」**：先 `cp` 源码自带的 `configs/<soc>.config` 作为 `.config`，
+再把机型精简配置 `cat >>` 追加（后写覆盖先写），最后 `make defconfig` 展开。
+
+这么做是必须的——不少符号是 tristate 且**无 default（默认 n）**，例如：
+- `CONFIG_LUCI_LANG_zh_Hans`（LuCI 中文总开关，默认 n → 不写就丢中文包）
+- `CONFIG_PACKAGE_TAR_*`、`CONFIG_PACKAGE_MAC80211_*`（tar / mac80211 特性开关）
+- `CONFIG_PACKAGE_kmod-mppe`、`CONFIG_PACKAGE_kmod-ovpn-backports`
+
+若直接把精简配置当 `.config` 展开，`defconfig` 会把这些重置成默认 n。先铺基座可保留全部非默认值。
 
 统一规则：
 
