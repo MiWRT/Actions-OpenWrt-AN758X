@@ -45,6 +45,7 @@ luci-i18n-package-manager-zh-cn
 luci-i18n-opkg-zh-cn
 luci-i18n-pon-zh-cn
 luci-i18n-iptv-zh-cn
+luci-i18n-upnp-zh-cn
 "
 
 echo "===== 检查 luci-i18n 包在 feeds 中是否存在 ====="
