@@ -17,8 +17,9 @@ GitHub Actions 自动编译 Airoha AN7581 PON 设备固件，源码 `pbs05/ponwr
 │   ├── an7581-unionman_ung00a.config
 │   ├── an7581-znxt_zn504xg-d.config
 │   └── an7581-znxt_zn515xg-d.config
-├── diy-part1.sh                         # feeds 阶段：补齐 PON 两个 feed
+├── diy-part1.sh                         # feeds 前：补齐 PON 两个 feed
 ├── diy-part2.sh                         # config 阶段：主机名 / 时区 / 硬件卸载
+├── diy-part3.sh                         # feeds 后：拉取第三方插件（passwall/openclash/daed 等）
 └── README.md
 ```
 
@@ -92,10 +93,53 @@ make -j$(nproc)
 | 中兴 ZN504XG-D | `znxt_zn504xg-d` | `kmod-airoha-en7572` |
 | 中兴 ZN515XG-D | `znxt_zn515xg-d` | `kmod-airoha-en7572` |
 
+## 已修的问题（排查记录）
+
+| 现象 | 原因 | 修复 |
+|---|---|---|
+| `cp: cannot stat '.../diy-part1.sh': No such file or directory` | 缺 `actions/checkout`，workspace 是空目录 | 第一步补 `actions/checkout@v4`；diy 脚本改为找不到就跳过 |
+| 分支 clone 失败 | `REPO_BRANCH` 写成 `main`，ponwrt 只有 `master` | 分支改为 `repo_branch` 输入项，默认 `master`，clone 前 `git ls-remote` 校验 |
+| 配置项被静默丢弃 | 符号名在本 target 不存在（如 `kmod-sched-fq_codel`、turboacc 系列） | 已按 ponwrt 实际符号表清理掉 4 个无效符号 |
+| 失败时拿不到日志 | `STATUS` 未初始化、日志路径靠相对跳转 | 编译前预置 `STATUS=error`，日志统一走 `github.workspace` 路径，`always()` 上传 |
+| `sha256sum *` 报 "Is a directory" 导致步骤失败 | 产物目录里混有子目录 | 改为 `find -maxdepth 1 -type f` 只对文件算校验和 |
+| Swap 创建失败导致整步中断 | 12G swapfile 可能超出 runner 磁盘 | 按 `/mnt` 可用空间自适应 12G/8G/4G，失败只打 warning 继续 |
+| 编译依赖不全 | 只跑了 immortalwrt 初始化脚本 | 脚本之后补显式安装 OpenWrt 必需项（pyelftools/swig/qemu-utils/jq 等） |
+
+## diy-part3.sh —— 第三方插件
+
+`diy-part3.sh` 在 **`feeds install` 之后、载入 `.config` 之前**执行（顺序不能变）：它会 `rm -rf` feeds 里若干包（golang、mosdns、smartdns、xray-core 等）再 clone 新版，并把插件 clone 到 `package/custom/`。
+
+拉完会自动再跑一次 `./scripts/feeds install -a` 修复被删目录的符号链接，并检查 `package/custom` 与 feeds 是否有同名包重复定义（有则打 warning）。
+
+拉到的插件在 `configs/*.config` **第 12 段**，默认全部注释掉 —— 不启用就不会编译、不影响 PON 功能。要用哪个就把对应行取消注释。
+
+### 三个已知注意点
+
+1. **luci-theme-argon 重复**：第 7 段已启用 feeds 版本，diy-part3 又拉了一份到 `package/custom`。两处同名会冲突。想用 diy-part3 那份，需在 `diy-part3.sh` 里加一行 `rm -rf feeds/luci/themes/luci-theme-argon`。
+2. **golang 被替换为 sbwml 26.x**：如果有你启用的包依赖 golang，会走新版；当前 PON 组件不依赖它。
+3. **luci-app-daed 需要内核 BTF**：启用时除取消注释外，还要打开 `CONFIG_KERNEL_DEBUG_INFO_BTF` 等（第 12 段注释里列全了），否则 eBPF 程序加载不了。
+
+## 常见构建错误
+
+**`cp: cannot stat '/home/runner/work/.../diy-part1.sh': No such file or directory`**
+
+原因是工作流缺少 `actions/checkout` 步骤，`$GITHUB_WORKSPACE` 是空目录。新版工作流已在第一步加了 `actions/checkout@v4`，并把 diy 脚本改成可选（找不到就跳过并打 warning）。
+
+同时确认推送时没有漏文件：仓库根目录要有 `diy-part1.sh`、`diy-part2.sh`，`configs/` 下要有 9 份 `.config`，`.github/workflows/` 下要有 yml。隐藏目录 `.github` 容易在复制时漏掉。
+
+## 分支与源码
+
 仓库 `pbs05/ponwrt` 只有 1 个分支 **`master`**（无 `main`），最新提交 `18d7b41`。`REPO_URL` 在 `.github/workflows/build-an7581.yml` 的 `env` 里硬编码为 `https://github.com/pbs05/ponwrt.git`，想换成自己的 fork 改这一行即可。
 
 分支通过 `repo_branch` 输入项选择，默认 `master`。克隆前会先用 `git ls-remote --heads` 校验分支是否存在，填错时日志会打印该仓库实际可用的分支列表，不会默默卡住。
 
+## 配置格式说明
+
+`configs/*.config` 是**精简配置（diffconfig）**：只列出相对 target 默认值有改动、或需要显式指定的项，其余交给 `make defconfig` 按 target 默认展开。
+
+每份约 209 行（全量展开后是 9000 行）。好处是改起来一眼能看全，坏处是**不能直接用**——必须先跑 `make defconfig`。工作流里已经包含这一步，本地编译也要记得跑。
+
+分 11 段，和 MT798X 那套 `.config` 的组织方式一致：
 
 | 段 | 内容 |
 |---|---|
