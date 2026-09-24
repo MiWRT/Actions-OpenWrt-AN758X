@@ -93,18 +93,6 @@ make -j$(nproc)
 | 兆能 ZN504XG-D | `znxt_zn504xg-d` | `kmod-airoha-en7572` |
 | 兆能 ZN515XG-D | `znxt_zn515xg-d` | `kmod-airoha-en7572` |
 
-## 已修的问题（排查记录）
-
-| 现象 | 原因 | 修复 |
-|---|---|---|
-| `cp: cannot stat '.../diy-part1.sh': No such file or directory` | 缺 `actions/checkout`，workspace 是空目录 | 第一步补 `actions/checkout@v4`；diy 脚本改为找不到就跳过 |
-| 分支 clone 失败 | `REPO_BRANCH` 写成 `main`，ponwrt 只有 `master` | 分支改为 `repo_branch` 输入项，默认 `master`，clone 前 `git ls-remote` 校验 |
-| 配置项被静默丢弃 | 符号名在本 target 不存在（如 `kmod-sched-fq_codel`、turboacc 系列） | 已按 ponwrt 实际符号表清理掉 4 个无效符号 |
-| 失败时拿不到日志 | `STATUS` 未初始化、日志路径靠相对跳转 | 编译前预置 `STATUS=error`，日志统一走 `github.workspace` 路径，`always()` 上传 |
-| `sha256sum *` 报 "Is a directory" 导致步骤失败 | 产物目录里混有子目录 | 改为 `find -maxdepth 1 -type f` 只对文件算校验和 |
-| Swap 创建失败导致整步中断 | 12G swapfile 可能超出 runner 磁盘 | 按 `/mnt` 可用空间自适应 12G/8G/4G，失败只打 warning 继续 |
-| 编译依赖不全 | 只跑了 immortalwrt 初始化脚本 | 脚本之后补显式安装 OpenWrt 必需项（pyelftools/swig/qemu-utils/jq 等） |
-
 ## diy-part3.sh —— 第三方插件
 
 `diy-part3.sh` 在 **`feeds install` 之后、载入 `.config` 之前**执行（顺序不能变）：它会 `rm -rf` feeds 里若干包（golang、mosdns、smartdns、xray-core 等）再 clone 新版，并把插件 clone 到 `package/custom/`。
