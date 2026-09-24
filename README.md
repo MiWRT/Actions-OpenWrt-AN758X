@@ -99,11 +99,6 @@ make -j$(nproc)
 
 拉到的插件在 `configs/*.config` **第 12 段**，默认全部注释掉 —— 不启用就不会编译、不影响 PON 功能。要用哪个就把对应行取消注释。
 
-### 三个已知注意点
-
-1. **luci-theme-argon 重复**：第 7 段已启用 feeds 版本，diy-part3 又拉了一份到 `package/custom`。两处同名会冲突。想用 diy-part3 那份，需在 `diy-part3.sh` 里加一行 `rm -rf feeds/luci/themes/luci-theme-argon`。
-2. **golang 被替换为 sbwml 26.x**：如果有你启用的包依赖 golang，会走新版；当前 PON 组件不依赖它。
-3. **luci-app-daed 需要内核 BTF**：启用时除取消注释外，还要打开 `CONFIG_KERNEL_DEBUG_INFO_BTF` 等（第 12 段注释里列全了），否则 eBPF 程序加载不了。
 
 ## 分支与源码
 
