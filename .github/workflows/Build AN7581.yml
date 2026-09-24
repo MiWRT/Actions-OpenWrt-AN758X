@@ -1,4 +1,4 @@
-name: Build AN7581 PonWrt-q
+name: Build AN7581 PonWrt
 
 on:
   workflow_dispatch:
@@ -70,29 +70,18 @@ jobs:
         # 删除大型预装软件
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
           /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/lib/jvm
-        sudo docker image prune --all --force || true
+        sudo docker image prune --all --force
 
-        # 配置 Swap（Rust/LLVM 编译需要），按 /mnt 可用空间自适应，失败不中断
-        AVAIL=$(df -BG --output=avail /mnt 2>/dev/null | tail -1 | tr -dc '0-9')
-        echo "/mnt 可用空间：${AVAIL:-0}G"
-        if [ "${AVAIL:-0}" -ge 24 ]; then SWAPSIZE=12G; elif [ "${AVAIL:-0}" -ge 16 ]; then SWAPSIZE=8G; else SWAPSIZE=4G; fi
-        echo "计划创建 Swap：${SWAPSIZE}"
-        sudo swapoff -a || true
-        sudo rm -f /mnt/swapfile || true
-        if sudo fallocate -l "$SWAPSIZE" /mnt/swapfile && \
-           sudo chmod 600 /mnt/swapfile && \
-           sudo mkswap /mnt/swapfile && \
-           sudo swapon /mnt/swapfile; then
-          echo "Swap 已启用：$SWAPSIZE"
-        else
-          echo "::warning::Swap 创建失败，继续编译（内存不足时可能失败）"
-          sudo rm -f /mnt/swapfile || true
-        fi
+        # 配置 12GB Swap（Rust/LLVM 编译需要大量虚拟内存）
+        sudo swapoff -a && sudo rm -f /mnt/swapfile
+        sudo fallocate -l 12G /mnt/swapfile
+        sudo chmod 600 /mnt/swapfile
+        sudo mkswap /mnt/swapfile && sudo swapon /mnt/swapfile
 
-        # 系统更新（full-upgrade 偶发失败，不让它中断流程）
-        sudo -E apt-get -yqq purge firefox snapd || true
+        # 系统更新
+        sudo -E apt-get -yqq purge firefox snapd
         sudo -E apt-get -yqq update
-        sudo -E apt-get -yqq full-upgrade || echo "::warning::full-upgrade 有失败项，继续"
+        sudo -E apt-get -yqq full-upgrade
 
         # 安装 eBPF / daed 编译依赖
         sudo -E apt-get -yqq install clang llvm dwarves build-essential \
@@ -100,26 +89,22 @@ jobs:
           dos2unix libfuse-dev
 
         # 安装 ImmortalWrt 官方编译依赖
-        sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)' \
-          || echo "::warning::immortalwrt 环境脚本执行失败，依赖下面的兜底安装"
-
-        # 兜底：显式安装 OpenWrt 编译必需项（官方脚本未覆盖的部分）
-        sudo -E apt-get -yqq install \
-          build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
-          gettext git libncurses5-dev libssl-dev python3-pyelftools python3-setuptools \
-          rsync swig unzip zlib1g-dev file wget jq qemu-utils
+        sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
 
         # 安装 pnpm（daed 前端构建需要）
-        sudo npm install -g pnpm || echo "::warning::pnpm 安装失败，daed 将无法构建"
+        sudo npm install -g pnpm
 
         # 清理
-        sudo -E apt-get -yqq autoremove --purge || true
-        sudo -E apt-get -yqq clean || true
-        sudo timedatectl set-timezone "$TZ" || echo "::warning::timedatectl 不可用（容器环境），改用 TZ 环境变量"
-        export TZ="$TZ"
+        sudo -E apt-get -yqq autoremove --purge
+        sudo -E apt-get -yqq clean
+        sudo -E timedatectl set-timezone "$TZ"
+
+        sudo mkdir -p /workdir
+        sudo chown "$USER":"$USER" /workdir
 
         echo "磁盘空间:"
         df -hT
+
         echo "内存/Swap:"
         free -h
 
@@ -147,114 +132,19 @@ jobs:
 
     - name: 拉取第三方插件（diy-part1.sh）
       run: |
+        [ -e "$FEEDS_CONF" ] && cp "$FEEDS_CONF" openwrt/feeds.conf.default
+        chmod +x "$DIY_P1_SH"
         cd openwrt
-        if [ -f "$GITHUB_WORKSPACE/$DIY_P1_SH" ]; then
-          cp "$GITHUB_WORKSPACE/$DIY_P1_SH" ./
-          chmod +x "$DIY_P1_SH"
-          ./$DIY_P1_SH || echo "::warning::$DIY_P1_SH 执行中有命令失败，继续流程"
-        else
-          echo "::warning::未找到 $DIY_P1_SH，跳过第三方插件"
-        fi
-        echo "===== package/custom ====="
-        ls -la package/custom 2>/dev/null || true
-        ./scripts/feeds install -a
-        echo "===== 重复包检查 ====="
-        for d in package/custom/*/; do
-          n=$(basename "$d")
-          c=$(find package -mindepth 2 -maxdepth 3 -type d -name "$n" 2>/dev/null | wc -l)
-          if [ "$c" -gt 1 ]; then
-            echo "::warning::包名重复定义：$n（$c 处），编译可能冲突"
-            find package -mindepth 2 -maxdepth 3 -type d -name "$n"
-          fi
-        done
+        "$GITHUB_WORKSPACE/$DIY_P1_SH"
 
-    - name: 载入 .config 与 diy-part2.sh
+    - name: diy-part2.sh
       run: |
+        [ -e files ] && cp -r files openwrt/files
+        [ -e "$CONFIG_FILE" ] && cp "$CONFIG_FILE" openwrt/.config
+        chmod +x "$DIY_P2_SH"
         cd openwrt
-        CFG="$GITHUB_WORKSPACE/configs-q/an7581-${{ inputs.device }}.config"
-        if [ -f "$CFG" ]; then
-          cp "$CFG" .config
-          echo "已载入：$CFG"
-        else
-          echo "::warning::未找到 $CFG，回退到源码自带 configs/an7581.config"
-          cp configs/an7581.config .config || exit 1
-        fi
-        if [ -f "$GITHUB_WORKSPACE/$DIY_P2_SH" ]; then
-          cp "$GITHUB_WORKSPACE/$DIY_P2_SH" diy-part2.sh
-          chmod +x diy-part2.sh
-          ./diy-part2.sh
-        else
-          echo "::warning::未找到 $DIY_P2_SH，跳过"
-        fi
-        make defconfig
+        "$GITHUB_WORKSPACE/$DIY_P2_SH"
 
-    - name: 校验 defconfig 展开结果
-      run: |
-        cd openwrt
-        echo "===== 展开后的 .config 行数 ====="
-        wc -l .config
-        echo "===== 目标 ====="
-        grep -E "^(CONFIG_TARGET_BOARD|CONFIG_TARGET_SUBTARGET)=" .config || true
-        grep -E "^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y" .config || true
-
-        fail=0
-        # 机型必须恰好一个
-        n=$(grep -cE "^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y" .config || true)
-        [ "$n" = "1" ] || { echo "::error::目标机型数量异常：$n"; fail=1; }
-
-        # 光器件驱动：必须恰好开一个
-        a=$(grep -c "^CONFIG_PACKAGE_kmod-airoha-en7572=y" .config || true)
-        b=$(grep -c "^CONFIG_PACKAGE_kmod-airoha-paged-bosa=y" .config || true)
-        echo "光器件：en7572=$a paged-bosa=$b"
-        [ "$((a+b))" = "1" ] || { echo "::error::光器件驱动应恰好开一个，当前 en7572=$a paged-bosa=$b"; fail=1; }
-
-        # PON 必选组件（package 名写错时 kconfig 会静默丢弃，这里兜住）
-        for p in kmod-airoha-xpon kmod-airoha-pon-frontend \
-                 airoha-pond airoha-ponctl airoha-pon-debug \
-                 luci-app-pon luci-app-iptv; do
-          if grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
-            echo "  [OK] $p"
-          else
-            echo "::error::缺失或被丢弃：$p（feeds 未装到 / 包名不对）"
-            fail=1
-          fi
-        done
-
-        echo "===== PON 组件实际状态 ====="
-        grep -E "^CONFIG_PACKAGE_(kmod-airoha-(xpon|pon-frontend|en7572|paged-bosa)|airoha-(pond|ponctl|pon-debug)|luci-app-(pon|iptv))=" .config || true
-
-        # 中文语言包：缺了界面就是英文，这里明确告警
-        echo "===== 中文语言包 ====="
-        if grep -qE "^CONFIG_PACKAGE_luci-i18n-.*-zh-cn=y" .config; then
-          grep -E "^CONFIG_PACKAGE_luci-i18n-.*-zh-cn=y" .config
-        else
-          echo "::error::没有任何 luci-i18n-*-zh-cn 被编入（feeds 里缺包或包名不对），界面会是英文"
-          echo "feeds 中实际的 luci-i18n 包："
-          find feeds package -maxdepth 4 -type d -name "luci-i18n*" 2>/dev/null | head -20 || true
-          fail=1
-        fi
-
-        # 时区数据：缺了 zonename 不生效
-        if ! grep -qE "^CONFIG_PACKAGE_zoneinfo" .config; then
-          echo "::warning::未开启 zoneinfo，Asia/Shanghai 无法解析，时区可能仍是 UTC"
-        fi
-
-        # 关键模块被重置为 =m 时告警（=m 只产 ipk，不进镜像）
-        echo "===== 检查被重置为 =m 的关键模块 ====="
-        for m in kmod-mt7915e kmod-mt7916-firmware kmod-phy-airoha-en8811h \
-                 kmod-fs-ext4 kmod-fs-exfat kmod-usb3 kmod-usb-storage; do
-          if grep -q "^CONFIG_PACKAGE_${m}=m" .config; then
-            echo "::warning::${m}=m，只产 ipk 不进镜像，刷完机不会自带"
-          fi
-        done
-
-        [ "$fail" = "0" ] || exit 1
-
-    # =========================================================
-    # 工具链缓存：actions/cache（第一优先）+ Release 备份（第二优先）
-    # 缓存 Key 基于 tools/ toolchain/ 的 Makefile 哈希，
-    # 源码 commit 变了但工具链没变时依然命中，比按 commit hash 缓存更稳
-    # =========================================================
     - name: 生成工具链缓存 Key
       id: cache-key
       run: |
