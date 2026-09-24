@@ -5,6 +5,7 @@ https://github.com/VIKINGYFY/CloseWRT-CI
 
 https://github.com/yhlh9982/Actions-OpenWrt-MT798X
 
+源码地址：https://github.com/pbs05/ponwrt
 GitHub Actions 自动编译 Airoha AN7581 PON 设备固件，源码 `pbs05/ponwrt`（ImmortalWrt + AN7581 PON 支持，内核 6.18）。
 
 ## 目录结构
