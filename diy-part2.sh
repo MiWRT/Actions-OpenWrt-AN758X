@@ -1,127 +1,145 @@
 #!/bin/bash
 # diy-part2.sh —— 在 .config 载入之后、make defconfig 之前执行
 #
-# 这里做两类事：
-#   1) 用 ./scripts/config 强制开启中文语言包等软件包（随后由 make defconfig 展开）
-#   2) 写 files/etc/uci-defaults/*，在设备首次启动时固化时区/LuCI 语言/硬件卸载
+# 做三类事：
+#   1) 用文本方式强制开局 .config 里的开关（中文包、光器件、zoneinfo 等）
+#   2) 改 package/base-files/files/bin/config_generate 本体，固化主机名与时区
+#   3) 写 files/etc/uci-defaults/*，设备首次启动时固化时区 / LuCI 中文 / 硬件卸载
 #
-# 注意：不要只改 package/base-files/files/etc/config/system ——
-# 首次启动时 config_generate 会重新生成 /etc/config/system 并把 timezone 写回 UTC，
-# 所以时区必须在 uci-defaults 里改，或直接改 config_generate。
+# ⚠ 重要：不要用 ./scripts/config —— 它是 kconfig 源码目录，不是可执行命令，
+#       执行会报 "Is a directory" (exit 126)。这里一律用 sed 改 .config 文本，
+#       最后由工作流里的 make defconfig 统一展开。
+#
+# ⚠ 时区只改 package/base-files/files/etc/config/system 无效：
+#       首次启动 config_generate 会重新生成 /etc/config/system 并写回 UTC。
+#       必须改 config_generate 本体。
 
 set -e
 CFG=".config"
-SCRIPTS_CFG="./scripts/config"
 
+# =================================================================
+# 0. 工具函数：直接编辑 .config 文本
+# =================================================================
 
-# ---------------------------------------------------------------
-# 1. 时区 —— 改 config_generate 里的默认值（会被首次启动写入 /etc/config/system）
-# ---------------------------------------------------------------
-if [ -f package/base-files/files/bin/config_generate ]; then
-    sed -i "s/timezone='UTC'/timezone='CST-8'/g" \
-        package/base-files/files/bin/config_generate
-    sed -i "s/zonename='UTC'/zonename='Asia\/Shanghai'/g" \
-        package/base-files/files/bin/config_generate
-    sed -i "s/option timezone 'UTC'/option timezone 'CST-8'/g" \
-        package/base-files/files/bin/config_generate
+# 强制开启（删除旧定义后追加 =y）
+cfg_enable() {
+    sed -i "/^$1=/d; /^# $1 is not set/d" "$CFG"
+    echo "$1=y" >> "$CFG"
+}
+
+# 强制关闭（删除旧定义后追加 is not set）
+cfg_disable() {
+    sed -i "/^$1=/d; /^# $1 is not set/d" "$CFG"
+    echo "# $1 is not set" >> "$CFG"
+}
+
+echo "=========================================="
+echo "[diy-part2] 开始"
+echo "=========================================="
+
+# =================================================================
+# 1. 主机名 —— 改 config_generate 本体
+# =================================================================
+CG="package/base-files/files/bin/config_generate"
+if [ -f "$CG" ]; then
+    sed -i 's/ImmortalWrt/PonWrt/g; s/OpenWrt/PonWrt/g' "$CG"
+    echo "[diy-part2] 主机名已改为 PonWrt"
+else
+    echo "[diy-part2] 未找到 $CG，跳过主机名修改"
 fi
+
+# =================================================================
+# 2. 时区 —— 改 config_generate 本体（关键）
+# =================================================================
+if [ -f "$CG" ]; then
+    # uci set 写法（现代 OpenWrt / ImmortalWrt）
+    sed -i "s/system\.@system\[-1\]\.timezone='UTC'/system.@system[-1].timezone='CST-8'/g" "$CG"
+    sed -i "s/system\.@system\[-1\]\.zonename='UTC'/system.@system[-1].zonename='Asia\/Shanghai'/g" "$CG"
+    # option 写法（部分版本）
+    sed -i "s/option timezone 'UTC'/option timezone 'CST-8'/g" "$CG"
+    sed -i "s/option zonename 'UTC'/option zonename 'Asia\/Shanghai'/g" "$CG"
+    echo "[diy-part2] config_generate 时区已改为 CST-8 / Asia-Shanghai"
+fi
+
 # 兜底：base-files 自带的 /etc/config/system
-if [ -f package/base-files/files/etc/config/system ]; then
-    sed -i "s#option timezone 'UTC'#option timezone 'CST-8'#" \
-        package/base-files/files/etc/config/system
-    sed -i "s#option zonename 'UTC'#option zonename 'Asia/Shanghai'#" \
-        package/base-files/files/etc/config/system
+SYS="package/base-files/files/etc/config/system"
+if [ -f "$SYS" ]; then
+    sed -i "s#option timezone 'UTC'#option timezone 'CST-8'#" "$SYS"
+    sed -i "s#option zonename 'UTC'#option zonename 'Asia/Shanghai'#" "$SYS"
+    echo "[diy-part2] base-files system 时区已改"
 fi
 
-# ---------------------------------------------------------------
-# 2. 强制开启中文语言包
-#    defconfig 对不存在的包名会静默丢弃，这里开着不代表一定能编出来，
-#    所以下面会校验 package 目录里到底有没有这些包。
-# ---------------------------------------------------------------
-I18N_PKGS="
-luci-i18n-base-zh-cn
-luci-i18n-firewall-zh-cn
-luci-i18n-package-manager-zh-cn
-luci-i18n-opkg-zh-cn
-luci-i18n-pon-zh-cn
-luci-i18n-iptv-zh-cn
-luci-i18n-upnp-zh-cn
-"
+# zoneinfo：没有 /usr/share/zoneinfo，Asia/Shanghai 解析不了
+cfg_enable CONFIG_PACKAGE_zoneinfo-asia
 
-echo "===== 检查 luci-i18n 包在 feeds 中是否存在 ====="
-FOUND_ANY=0
-for p in $I18N_PKGS; do
-    # feeds 装好后形如 feeds/luci/applications/luci-i18n-base-zh-cn 或 luci/.../luci-i18n-base-zh-cn
-    if [ -d "feeds/luci/applications/$p" ] || [ -d "feeds/luci/modules/$p" ] \
-       || [ -d "package/feeds/luci/$p" ] || [ -d "package/$p" ]; then
-        echo "  [存在] $p"
-        FOUND_ANY=1
-    else
-        echo "  [缺失] $p（feeds 里没有，开了也不会编出来）"
-    fi
-done
-
-if [ "$FOUND_ANY" = "0" ]; then
-    echo "::warning::feeds 中未找到任何 luci-i18n-*-zh-cn 包目录"
-    echo "可能原因：luci feed 未安装 / 版本不含 i18n / 包名命名不同"
-    echo "已存在的 luCI i18n 目录："
-    find feeds package -maxdepth 4 -type d -name "luci-i18n*" 2>/dev/null | head -20 || true
+# =================================================================
+# 3. 中文语言包
+#    现代 LuCI 的 i18n 包由 luci.mk 从 po/zh-cn/ 自动生成，
+#    没有 luci-i18n-base-zh-cn 这种独立目录，所以查 po 目录才准。
+# =================================================================
+echo "===== 检查 LuCI 中文翻译源 (po/zh-cn) ====="
+PO_DIRS=$(find feeds/luci package/feeds/luci -type d -name "zh-cn" 2>/dev/null || true)
+PO_COUNT=$(printf '%s' "$PO_DIRS" | grep -c . || true)
+echo "zh-cn 翻译目录数量：$PO_COUNT"
+if [ "$PO_COUNT" -eq 0 ]; then
+    echo "::warning::feeds/luci 里没有任何 po/zh-cn 目录，LuCI 界面不会有中文"
+    echo "已存在的所有 luci 相关目录（前 20 个）："
+    find feeds package -maxdepth 3 -type d -name "*luci*" 2>/dev/null | head -20 || true
+else
+    echo "$PO_DIRS" | head -10
 fi
 
-# 仍然尝试开启（存在的会生效，不存在的 defconfig 会静默丢弃）
-for p in $I18N_PKGS; do
-    "$SCRIPTS_CFG" --enable "CONFIG_PACKAGE_$p" 2>/dev/null || true
+# 开启中文包（包名正确就生效，不对的 defconfig 会静默丢弃）
+for p in luci-i18n-base-zh-cn \
+         luci-i18n-firewall-zh-cn \
+         luci-i18n-package-manager-zh-cn \
+         luci-i18n-opkg-zh-cn \
+         luci-i18n-pon-zh-cn \
+         luci-i18n-iptv-zh-cn; do
+    cfg_enable "CONFIG_PACKAGE_$p"
 done
 
-# 中文时区数据（zonename 需要 /usr/share/zoneinfo）
-"$SCRIPTS_CFG" --enable CONFIG_PACKAGE_zoneinfo-asia 2>/dev/null || true
-
-# ---------------------------------------------------------------
-# 3. 光器件驱动 —— 防止 defconfig 把 =y 重置回 =m
-# ---------------------------------------------------------------
-DEVICE_LINE=$(grep -oE "^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_[A-Za-z0-9_-]+=y" "$CFG" | head -1)
-DEVICE_NAME=$(echo "$DEVICE_LINE" | sed 's/.*DEVICE_//; s/=y$//')
-echo "===== 目标机型：$DEVICE_NAME ====="
+# =================================================================
+# 4. 光器件驱动 —— 防止 defconfig 把 =y 重置回 =m
+# =================================================================
+DEVICE_NAME=$(grep -oE "^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_[A-Za-z0-9_-]+=y" "$CFG" \
+              | head -1 | sed 's/.*DEVICE_//; s/=y$//')
+echo "===== 目标机型：${DEVICE_NAME:-未指定} ====="
 
 case "$DEVICE_NAME" in
     fiberhome_*)
-        echo "烽火机型 -> GN28L95 / UX3363 (paged-bosa)"
-        "$SCRIPTS_CFG" --set-val CONFIG_PACKAGE_kmod-airoha-paged-bosa y
-        "$SCRIPTS_CFG" --disable CONFIG_PACKAGE_kmod-airoha-en7572
+        echo "烽火机型 -> GN28L95 / UX3363 (kmod-airoha-paged-bosa)"
+        cfg_enable  CONFIG_PACKAGE_kmod-airoha-paged-bosa
+        cfg_disable CONFIG_PACKAGE_kmod-airoha-en7572
         ;;
     *)
-        echo "非烽火机型 -> EN7572"
-        "$SCRIPTS_CFG" --set-val CONFIG_PACKAGE_kmod-airoha-en7572 y
-        "$SCRIPTS_CFG" --disable CONFIG_PACKAGE_kmod-airoha-paged-bosa
+        echo "非烽火机型 -> EN7572 (kmod-airoha-en7572)"
+        cfg_enable  CONFIG_PACKAGE_kmod-airoha-en7572
+        cfg_disable CONFIG_PACKAGE_kmod-airoha-paged-bosa
         ;;
 esac
 
-# 其它易被重置为 =m 的模块，一并强制内置
+# =================================================================
+# 5. 其它易被 defconfig 重置为 =m 的模块，强制内置
+#    =m 只产 ipk 不打进镜像，刷完机不会自带
+# =================================================================
 for m in kmod-mt7915e kmod-mt7916-firmware kmod-phy-airoha-en8811h \
          airoha-en8811h-firmware kmod-fs-ext4 kmod-fs-exfat kmod-fs-vfat \
          kmod-usb3 kmod-usb-storage kmod-usb-storage-uas; do
     if grep -qE "^(# )?CONFIG_PACKAGE_${m}( is not set|=)" "$CFG"; then
-        "$SCRIPTS_CFG" --set-val "CONFIG_PACKAGE_$m" y 2>/dev/null || true
+        cfg_enable "CONFIG_PACKAGE_$m"
     fi
 done
 
-# ---------------------------------------------------------------
-# 4. 首次启动固化（uci-defaults）—— 时区 / LuCI 中文 / 硬件卸载
-# ---------------------------------------------------------------
+# =================================================================
+# 6. 首次启动固化（uci-defaults）
+# =================================================================
 mkdir -p files/etc/uci-defaults
 
-cat > files/etc/uci-defaults/99-pon-system <<'EOF'
-# 主机名
-uci -q set system.@system[0].hostname='PonWrt'
-# 时区：CST-8（中国标准时间）
+cat > files/etc/uci-defaults/98-timezone <<'EOF'
 uci -q set system.@system[0].timezone='CST-8'
 uci -q set system.@system[0].zonename='Asia/Shanghai'
 uci -q commit system
-
-# 硬件流卸载（AN7581 PPE / NPU）
-uci -q set firewall.@defaults[0].flow_offloading=1
-uci -q set firewall.@defaults[0].flow_offloading_hw=1
-uci -q commit firewall
 exit 0
 EOF
 
@@ -135,12 +153,22 @@ uci -q commit luci
 exit 0
 EOF
 
-# ---------------------------------------------------------------
-# 5. 输出核对
-# ---------------------------------------------------------------
-echo "===== 中文包开关状态 ====="
-grep -E "^CONFIG_PACKAGE_luci-i18n.*zh-cn" "$CFG" || echo "::warning::配置中没有任何 zh-cn 包"
-echo "===== 时区相关 ====="
+cat > files/etc/uci-defaults/99-pon-offload <<'EOF'
+# 硬件流卸载（AN7581 PPE / NPU）
+uci -q set firewall.@defaults[0].flow_offloading=1
+uci -q set firewall.@defaults[0].flow_offloading_hw=1
+uci -q commit firewall
+exit 0
+EOF
+
+chmod +x files/etc/uci-defaults/* 2>/dev/null || true
+
+# =================================================================
+# 7. 输出核对
+# =================================================================
+echo "===== 中文语言包开关 ====="
+grep -E "^CONFIG_PACKAGE_luci-i18n.*zh-cn" "$CFG" || echo "::warning::没有任何 zh-cn 包"
+echo "===== zoneinfo ====="
 grep -E "^CONFIG_PACKAGE_zoneinfo" "$CFG" || echo "::warning::未开启 zoneinfo"
 echo "===== 光器件驱动 ====="
 grep -E "^CONFIG_PACKAGE_kmod-airoha-(en7572|paged-bosa)" "$CFG" || true
