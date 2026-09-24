@@ -1,4 +1,4 @@
-name: Build AN7581 PonWrt-q
+name: Build AN7581 PonWrt
 
 on:
   workflow_dispatch:
@@ -28,6 +28,11 @@ on:
         required: false
         default: false
         type: boolean
+      ssh:
+        description: '开启 SSH 调试（tmate，会挂起直到超时，谨慎使用）'
+        required: false
+        default: false
+        type: boolean
 
 env:
   REPO_URL: https://github.com/pbs05/ponwrt.git
@@ -40,6 +45,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 350
     permissions:
       contents: write
 
@@ -65,12 +71,12 @@ jobs:
         # 删除大型预装软件
         sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
           /opt/hostedtoolcache/CodeQL /usr/local/share/boost /usr/lib/jvm
-        sudo docker image prune --all --force
+        sudo docker image prune --all --force || true
 
         # 配置 Swap（Rust/LLVM 编译需要），按 /mnt 可用空间自适应，失败不中断
-        AVAIL=$(df -BG --output=avail /mnt | tail -1 | tr -dc '0-9')
-        echo "/mnt 可用空间：${AVAIL}G"
-        if [ "$AVAIL" -ge 24 ]; then SWAPSIZE=12G; elif [ "$AVAIL" -ge 16 ]; then SWAPSIZE=8G; else SWAPSIZE=4G; fi
+        AVAIL=$(df -BG --output=avail /mnt 2>/dev/null | tail -1 | tr -dc '0-9')
+        echo "/mnt 可用空间：${AVAIL:-0}G"
+        if [ "${AVAIL:-0}" -ge 24 ]; then SWAPSIZE=12G; elif [ "${AVAIL:-0}" -ge 16 ]; then SWAPSIZE=8G; else SWAPSIZE=4G; fi
         echo "计划创建 Swap：${SWAPSIZE}"
         sudo swapoff -a || true
         sudo rm -f /mnt/swapfile || true
@@ -84,10 +90,10 @@ jobs:
           sudo rm -f /mnt/swapfile || true
         fi
 
-        # 系统更新
-        sudo -E apt-get -yqq purge firefox snapd
+        # 系统更新（full-upgrade 偶发失败，不让它中断流程）
+        sudo -E apt-get -yqq purge firefox snapd || true
         sudo -E apt-get -yqq update
-        sudo -E apt-get -yqq full-upgrade
+        sudo -E apt-get -yqq full-upgrade || echo "::warning::full-upgrade 有失败项，继续"
 
         # 安装 eBPF / daed 编译依赖
         sudo -E apt-get -yqq install clang llvm dwarves build-essential \
@@ -95,7 +101,8 @@ jobs:
           dos2unix libfuse-dev
 
         # 安装 ImmortalWrt 官方编译依赖
-        sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)'
+        sudo bash -c 'bash <(curl -sL https://build-scripts.immortalwrt.org/init_build_environment.sh)' \
+          || echo "::warning::immortalwrt 环境脚本执行失败，依赖下面的兜底安装"
 
         # 兜底：显式安装 OpenWrt 编译必需项（官方脚本未覆盖的部分）
         sudo -E apt-get -yqq install \
@@ -107,16 +114,13 @@ jobs:
         sudo npm install -g pnpm || echo "::warning::pnpm 安装失败，daed 将无法构建"
 
         # 清理
-        sudo -E apt-get -yqq autoremove --purge
-        sudo -E apt-get -yqq clean
-        sudo -E timedatectl set-timezone "$TZ"
-
-        sudo mkdir -p /workdir
-        sudo chown "$USER":"$USER" /workdir
+        sudo -E apt-get -yqq autoremove --purge || true
+        sudo -E apt-get -yqq clean || true
+        sudo timedatectl set-timezone "$TZ" || echo "::warning::timedatectl 不可用（容器环境），改用 TZ 环境变量"
+        export TZ="$TZ"
 
         echo "磁盘空间:"
         df -hT
-
         echo "内存/Swap:"
         free -h
 
@@ -144,10 +148,16 @@ jobs:
           chmod +x "$DIY_P1_SH"
           ./$DIY_P1_SH
         else
-          echo "::warning::未找到 $DIY_P1_SH，跳过；使用源码自带 feeds.conf.default"
+          echo "::warning::未找到 $DIY_P1_SH，跳过；使用源码自带 feeds 配置"
         fi
-        echo "===== feeds.conf.default ====="
-        cat feeds.conf.default
+        echo "===== feeds 配置 ====="
+        # ponwrt 可能用 feeds.conf 而非 feeds.conf.default，硬编码 cat 会踩空
+        if [ -f feeds.conf.default ]; then cat feeds.conf.default
+        elif [ -f feeds.conf ]; then cat feeds.conf
+        else echo "::warning::未找到任何 feeds 配置文件"; fi
+        echo "===== PON feed 是否就位 ====="
+        grep -E "pon_drivers|pon_userspace" feeds.conf.default feeds.conf 2>/dev/null \
+          || echo "::warning::未发现 pon_drivers / pon_userspace feed，PON 相关包将无法编译"
 
     - name: 更新并安装 feeds
       run: |
@@ -191,7 +201,7 @@ jobs:
           echo "已载入：$CFG"
         else
           echo "::warning::未找到 $CFG，回退到源码自带 configs/an7581.config"
-          cp configs/an7581.config .config
+          cp configs/an7581.config .config || exit 1
         fi
         if [ -f "$GITHUB_WORKSPACE/$DIY_P2_SH" ]; then
           cp "$GITHUB_WORKSPACE/$DIY_P2_SH" diy-part2.sh
@@ -239,18 +249,205 @@ jobs:
 
         [ "$fail" = "0" ] || exit 1
 
-    - name: 缓存工具链
+    # =========================================================
+    # 工具链缓存：actions/cache（第一优先）+ Release 备份（第二优先）
+    # 缓存 Key 基于 tools/ toolchain/ 的 Makefile 哈希，
+    # 源码 commit 变了但工具链没变时依然命中，比按 commit hash 缓存更稳
+    # =========================================================
+    - name: 生成工具链缓存 Key
+      id: cache-key
+      run: |
+        cd openwrt
+        # 确保 .config 已展开（前面已 defconfig，这里兜底再跑一次）
+        make defconfig 1>/dev/null 2>&1 || true
+
+        TARGET=$(grep '^CONFIG_TARGET_BOARD=' .config | cut -d'"' -f2)
+        SUBTARGET=$(grep '^CONFIG_TARGET_SUBTARGET=' .config | cut -d'"' -f2)
+
+        # 取不到就回退，避免 key 变成空段
+        [ -n "$TARGET" ]    || TARGET="unknown"
+        [ -n "$SUBTARGET" ] || SUBTARGET="unknown"
+
+        TOOLS_HASH=$(find tools toolchain -type f \( -name "Makefile" -o -name "*.mk" \) \
+          -exec md5sum {} + 2>/dev/null | sort | md5sum | cut -d' ' -f1)
+
+        CACHE_KEY="toolchain-${TARGET}-${SUBTARGET}-${TOOLS_HASH:0:16}"
+        CACHE_PREFIX="toolchain-${TARGET}-${SUBTARGET}"
+
+        echo "CACHE_KEY=$CACHE_KEY" >> "$GITHUB_OUTPUT"
+        echo "CACHE_PREFIX=$CACHE_PREFIX" >> "$GITHUB_OUTPUT"
+
+        echo "===== 缓存 Key ====="
+        echo "Key   : $CACHE_KEY"
+        echo "前缀  : $CACHE_PREFIX"
+
+    - name: 恢复工具链（actions/cache）
+      uses: actions/cache/restore@v4
+      id: cache-restore
       if: inputs.clean_cache != true
-      uses: actions/cache@v4
       with:
-        path: openwrt/staging_dir
-        key: ponwrt-an7581-toolchain-${{ env.COMMIT_HASH }}
-        restore-keys: ponwrt-an7581-toolchain-
+        path: |
+          openwrt/staging_dir/host*
+          openwrt/staging_dir/tool*
+        key: ${{ steps.cache-key.outputs.CACHE_KEY }}
+
+    - name: 恢复工具链（Release 备份）
+      if: inputs.clean_cache != true && steps.cache-restore.outputs.cache-hit != 'true'
+      id: release-restore
+      continue-on-error: true
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cd openwrt
+
+        CACHE_KEY="${{ steps.cache-key.outputs.CACHE_KEY }}"
+        # 压缩包后缀在保存侧决定，这里按优先级依次尝试
+        for ASSET_NAME in "${CACHE_KEY}.tzst" "${CACHE_KEY}.tar.gz"; do
+          if gh release view toolchain-cache --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 && \
+             gh release view toolchain-cache --repo "$GITHUB_REPOSITORY" --json assets \
+               -q '.assets[].name' 2>/dev/null | grep -qx "$ASSET_NAME"; then
+
+            echo "从 Release 下载工具链：$ASSET_NAME"
+            if gh release download toolchain-cache --repo "$GITHUB_REPOSITORY" -p "$ASSET_NAME" -D . && [ -e "$ASSET_NAME" ]; then
+              echo "解压中..."
+              case "$ASSET_NAME" in
+                *.tzst)   tar -I unzstd -xf "$ASSET_NAME" || tar -I 'zstd -d' -xf "$ASSET_NAME" || tar -xf "$ASSET_NAME" ;;
+                *.tar.gz) tar -xzf "$ASSET_NAME" ;;
+                *)        tar -xf "$ASSET_NAME" ;;
+              esac
+              rm -f "$ASSET_NAME"
+              echo "restored=true" >> "$GITHUB_OUTPUT"
+              echo "Release 备份恢复成功"
+              exit 0
+            fi
+          fi
+        done
+
+        echo "restored=false" >> "$GITHUB_OUTPUT"
+        echo "无可用 Release 备份（首次运行或缓存已过期）"
+
+    - name: 处理工具链
+      id: toolchain
+      run: |
+        cd openwrt
+
+        CACHE_HIT="${{ steps.cache-restore.outputs.cache-hit }}"
+        RELEASE_HIT="${{ steps.release-restore.outputs.restored }}"
+
+        if [ "$CACHE_HIT" = "true" ]; then
+          echo "actions/cache 命中，跳过工具链编译"
+          echo "need_save_cache=false" >> "$GITHUB_OUTPUT"
+          echo "need_save_release=false" >> "$GITHUB_OUTPUT"
+
+        elif [ "$RELEASE_HIT" = "true" ]; then
+          echo "Release 备份命中，重新写入 actions/cache 加速下次构建"
+          echo "need_save_cache=true" >> "$GITHUB_OUTPUT"
+          echo "need_save_release=false" >> "$GITHUB_OUTPUT"
+
+        else
+          echo "===== 无可用缓存，开始编译工具链（耗时较长）====="
+          echo "CPU 线程：$(nproc)"
+
+          make tools/install -j"$(nproc)" || make tools/install -j1 V=s || {
+            echo "::error::tools 编译失败"
+            exit 1
+          }
+          echo "tools 编译完成"
+
+          make toolchain/install -j"$(nproc)" || make toolchain/install -j1 V=s || {
+            echo "::error::toolchain 编译失败"
+            exit 1
+          }
+          echo "toolchain 编译完成"
+
+          echo "need_save_cache=true" >> "$GITHUB_OUTPUT"
+          echo "need_save_release=true" >> "$GITHUB_OUTPUT"
+        fi
+
+        # 从顶层 Makefile 移除 toolchain stamp 依赖，让后续 make 跳过工具链重编
+        # 匹配不到时 sed 静默无效，最坏情况只是重编一次，不会破坏构建
+        sed -i 's/ $(tool.*\/stamp-compile)//' Makefile
+        echo "Makefile 已处理，后续编译将跳过工具链"
+
+    - name: 保存工具链到 actions/cache
+      uses: actions/cache/save@v4
+      if: steps.toolchain.outputs.need_save_cache == 'true'
+      with:
+        path: |
+          openwrt/staging_dir/host*
+          openwrt/staging_dir/tool*
+        key: ${{ steps.cache-key.outputs.CACHE_KEY }}
+
+    - name: 保存工具链到 Release 备份
+      if: steps.toolchain.outputs.need_save_release == 'true'
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        cd openwrt
+
+        CACHE_KEY="${{ steps.cache-key.outputs.CACHE_KEY }}"
+        CACHE_PREFIX="${{ steps.cache-key.outputs.CACHE_PREFIX }}"
+
+        # 选压缩方式：优先多线程 zstd，其次单线程 zstd，最后 gzip
+        if command -v zstdmt >/dev/null 2>&1; then
+          ASSET_NAME="${CACHE_KEY}.tzst"
+          tar -I zstdmt -cf "$ASSET_NAME" staging_dir/host* staging_dir/tool*
+        elif command -v zstd >/dev/null 2>&1; then
+          ASSET_NAME="${CACHE_KEY}.tzst"
+          tar -I 'zstd -T0' -cf "$ASSET_NAME" staging_dir/host* staging_dir/tool*
+        else
+          ASSET_NAME="${CACHE_KEY}.tar.gz"
+          tar -czf "$ASSET_NAME" staging_dir/host* staging_dir/tool*
+        fi
+
+        if [ ! -e "$ASSET_NAME" ]; then
+          echo "::warning::工具链打包失败，跳过 Release 备份"
+          exit 0
+        fi
+        ls -lh "$ASSET_NAME"
+
+        # Release asset 单文件上限 2GB，超限则放弃备份（缓存仍走 actions/cache）
+        SIZE_MB=$(( $(stat -c %s "$ASSET_NAME") / 1024 / 1024 ))
+        echo "压缩包大小：${SIZE_MB} MB"
+        if [ "$SIZE_MB" -gt 1900 ]; then
+          echo "::warning::工具链包超过 1.9GB，GitHub Release 单 asset 上限 2GB，跳过备份"
+          rm -f "$ASSET_NAME"
+          exit 0
+        fi
+
+        if ! gh release view toolchain-cache --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          echo "创建 toolchain-cache Release..."
+          if ! gh release create toolchain-cache \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Toolchain Cache" \
+            --notes "自动生成的工具链缓存，请勿手动删除" \
+            --latest=false; then
+            echo "::warning::Release 创建失败，跳过备份（actions/cache 已保存）"
+            rm -f "$ASSET_NAME"
+            exit 0
+          fi
+        fi
+
+        # 删除同平台旧缓存，避免 Release 越积越多
+        gh release view toolchain-cache --repo "$GITHUB_REPOSITORY" --json assets \
+          -q '.assets[].name' 2>/dev/null | \
+          grep "^${CACHE_PREFIX}" | while read -r old_file; do
+            [ "$old_file" = "$ASSET_NAME" ] && continue
+            echo "删除旧缓存：$old_file"
+            gh release delete-asset toolchain-cache "$old_file" --repo "$GITHUB_REPOSITORY" -y 2>/dev/null || true
+          done
+
+        echo "上传到 Release..."
+        gh release upload toolchain-cache "$ASSET_NAME" --repo "$GITHUB_REPOSITORY" --clobber \
+          || echo "::warning::Release 上传失败，不影响本次构建（actions/cache 已保存）"
+
+        rm -f "$ASSET_NAME"
 
     - name: 下载软件包
       run: |
         cd openwrt
-        make download -j8
+        echo "CPU 线程：$(nproc)"
+        make download -j8 || make download -j1 V=s
         find dl -size -1024c -exec rm -f {} \;
 
     - name: 编译固件
@@ -258,8 +455,17 @@ jobs:
         cd openwrt
         echo "STATUS=error" >> $GITHUB_ENV
         echo "FIRMWARE_PATH=$(pwd)/bin/targets/airoha/an7581" >> $GITHUB_ENV
+
+        echo "===== 第一轮：并行编译 -j$(nproc) ====="
         make -j$(nproc) 2>&1 | tee build.log
+
         # 只看 make 自己报的错，避免源码里出现 "error" 字样被误判
+        if grep -qiE '^make[^:]*: \*\*\*|Error [0-9]+$' build.log; then
+          echo "::warning::并行编译失败，改用单线程重试（OpenWrt 常见的并行竞态）"
+          echo "===== 第二轮：单线程 -j1 V=s ====="
+          make -j1 V=s 2>&1 | tee -a build.log
+        fi
+
         if grep -qiE '^make[^:]*: \*\*\*|Error [0-9]+$' build.log; then
           echo "STATUS=error" >> $GITHUB_ENV
         else
@@ -315,3 +521,10 @@ jobs:
           - 内核：6.18
           - PON：airoha-pond / ponctl / pon-debug / luci-app-pon / luci-app-iptv
           - 光器件驱动：见所选配置的注释第 2 段
+
+    # 仅在手动勾选 ssh 时进入；tmate 会一直挂起到 job 超时（350 分钟），
+    # 连上后请手动 Cancel workflow 释放 runner
+    - name: SSH 调试（tmate）
+      uses: mxschmitt/action-tmate@v3
+      if: inputs.ssh
+      timeout-minutes: 30
