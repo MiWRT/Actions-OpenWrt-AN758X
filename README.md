@@ -107,14 +107,6 @@ make -j$(nproc)
 2. **golang 被替换为 sbwml 26.x**：如果有你启用的包依赖 golang，会走新版；当前 PON 组件不依赖它。
 3. **luci-app-daed 需要内核 BTF**：启用时除取消注释外，还要打开 `CONFIG_KERNEL_DEBUG_INFO_BTF` 等（第 12 段注释里列全了），否则 eBPF 程序加载不了。
 
-## 常见构建错误
-
-**`cp: cannot stat '/home/runner/work/.../diy-part1.sh': No such file or directory`**
-
-原因是工作流缺少 `actions/checkout` 步骤，`$GITHUB_WORKSPACE` 是空目录。新版工作流已在第一步加了 `actions/checkout@v4`，并把 diy 脚本改成可选（找不到就跳过并打 warning）。
-
-同时确认推送时没有漏文件：仓库根目录要有 `diy-part1.sh`、`diy-part2.sh`，`configs/` 下要有 9 份 `.config`，`.github/workflows/` 下要有 yml。隐藏目录 `.github` 容易在复制时漏掉。
-
 ## 分支与源码
 
 仓库 `pbs05/ponwrt` 只有 1 个分支 **`master`**（无 `main`），最新提交 `18d7b41`。`REPO_URL` 在 `.github/workflows/build-an7581.yml` 的 `env` 里硬编码为 `https://github.com/pbs05/ponwrt.git`，想换成自己的 fork 改这一行即可。
