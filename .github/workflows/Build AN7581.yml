@@ -337,48 +337,38 @@ jobs:
     - name: 下载软件包
       run: |
         cd openwrt
-        echo "CPU 线程：$(nproc)"
+        make defconfig
         make download -j8 || make download -j1 V=s
+        find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
     - name: 编译固件
       run: |
         cd openwrt
-        echo "STATUS=error" >> $GITHUB_ENV
-        echo "FIRMWARE_PATH=$(pwd)/bin/targets/airoha/an7581" >> $GITHUB_ENV
 
-        echo "===== 第一轮：并行编译 -j$(nproc) ====="
-        make -j$(nproc) 2>&1 | tee build.log
+        echo "开始编译... ($(nproc) 线程)"
+        df -hT /
 
-        # 只看 make 自己报的错，避免源码里出现 "error" 字样被误判
-        if grep -qiE '^make[^:]*: \*\*\*|Error [0-9]+$' build.log; then
-          echo "::warning::并行编译失败，改用单线程重试（OpenWrt 常见的并行竞态）"
-          echo "===== 第二轮：单线程 -j1 V=s ====="
-          make -j1 V=s 2>&1 | tee -a build.log
-        fi
-
-        if grep -qiE '^make[^:]*: \*\*\*|Error [0-9]+$' build.log; then
-          echo "STATUS=error" >> $GITHUB_ENV
+        if make -j"$(nproc)"; then
+          echo "多线程编译成功"
+        elif make -j1; then
+          echo "单线程编译成功"
+        elif make -j1 V=s; then
+          echo "单线程详细日志编译成功"
         else
-          echo "STATUS=success" >> $GITHUB_ENV
+          echo "编译失败"
+          exit 1
         fi
 
-    - name: 编译失败时输出日志尾部
-      if: env.STATUS == 'error'
-      run: |
-        echo "========== build.log 最后 300 行 =========="
-        tail -n 300 "${{ github.workspace }}/openwrt/build.log" || true
-        echo "========== 错误行 =========="
-        grep -iE "error|Error [0-9]" "${{ github.workspace }}/openwrt/build.log" | head -50 || true
+        echo "========================================"
+        echo "固件编译完成"
+        echo "最终磁盘空间:"
+        df -hT /
+        echo "========================================"
 
-    - name: 上传编译日志
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: an7581-${{ inputs.device }}-build-log
-        path: openwrt/build.log
-        if-no-files-found: ignore
-
+        echo "status=success" >> "$GITHUB_OUTPUT"
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> "$GITHUB_ENV"
+        
     - name: 整理固件
       if: env.STATUS == 'success'
       run: |
