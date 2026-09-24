@@ -57,7 +57,7 @@ ponwrt README 的流程：
 | 烽火 HG5382A / HG5585F-CT / HG5585F-CU | `factory` | 需先用 **FiberHome Factory** 转换，再恢复到 PonWrt 的 factory 卷 |
 | 智易 XG2010G | `dsd` | 恢复到 factory 卷 |
 | 诺基亚贝尔 XG-040G-MD / TF | `bosa`, `ri` | 恢复到同名卷 |
-| 联动 UNG00A / 中兴 ZN504XG-D / ZN515XG-D | `reservearea` | 恢复到 factory 卷 |
+| 九联 UNG00A / 兆能 ZN504XG-D / ZN515XG-D | `reservearea` | 恢复到 factory 卷 |
 
 不恢复板级数据，PON 光口通常无法注册。
 
