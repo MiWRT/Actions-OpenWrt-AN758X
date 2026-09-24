@@ -30,15 +30,6 @@ GitHub Actions 自动编译 Airoha AN7581 PON 设备固件，源码 `pbs05/ponwr
 └── README.md
 ```
 
-## 用法
-
-1. 新建 GitHub 仓库，把本目录内容整个推上去（`.github/` 开头的目录别漏）。
-2. Actions → **Build AN7581 PonWrt** → **Run workflow**：
-   - `device`：机型，9 选 1，默认 `fiberhome_hg5585f-cu`
-   - `repo_branch`：源码分支，默认 **`master`**（ponwrt 的默认分支是 master，不是 main），可填自己 fork 的分支名
-   - `clean_cache`：勾选则忽略工具链缓存，全量重编
-3. 约 1–2 小时后，Actions 页面右上角 Artifacts 下载固件；也会自动打 tag 发 Release。
-4. 产物在 `bin/targets/airoha/an7581/`。
 
 ## 刷机与 PON 板级数据（重要）
 
