@@ -33,21 +33,6 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 - 写 `files/etc/uci-defaults/99-timezone-cn`，保留旧配置升级时也强制刷成中国时区
 - 往 `.config` 追加 `CONFIG_PACKAGE_zoneinfo-asia=y`（LuCI 时区显示与切换需要，基座默认关闭）
 
-## configs 说明
-
-每个机型一份 `configs/<profile>.config`，统一为**精简 diffconfig**（约 450 行），只写与 ponwrt 官方
-`configs/an7581.config` / `an7583.config` 基座的差异。
-
-⚠️ **流程采用「基座打底 + 差异追加」**：先 `cp` 源码自带的 `configs/<soc>.config` 作为 `.config`，
-再把机型精简配置 `cat >>` 追加（后写覆盖先写），最后 `make defconfig` 展开。
-
-这么做是必须的——不少符号是 tristate 且**无 default（默认 n）**，例如：
-- `CONFIG_LUCI_LANG_zh_Hans`（LuCI 中文总开关，默认 n → 不写就丢中文包）
-- `CONFIG_PACKAGE_TAR_*`、`CONFIG_PACKAGE_MAC80211_*`（tar / mac80211 特性开关）
-- `CONFIG_PACKAGE_kmod-mppe`、`CONFIG_PACKAGE_kmod-ovpn-backports`
-
-若直接把精简配置当 `.config` 展开，`defconfig` 会把这些重置成默认 n。先铺基座可保留全部非默认值。
-
 统一规则：
 
 - **NPU 每机型都开**：AN7581 → `airoha-en7581-npu-firmware=y`，AN7583 → `airoha-an7583-npu-firmware=y`，
@@ -57,16 +42,6 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
   不引入 iptables，也不引入 OpenWrt 官方 feed 的包；PON 相关全部来自 `pon_drivers` / `pon_userspace`。
 - **按 DTS 硬件逐机型裁剪**：光器件（FiberHome BOSA / EN7572 二选一）、PHY（GPY211 / EN8811H / RTL8261N）、
   WiFi（仅 hg5585f-ct/cu 与 zn515 有 MT7916D）、USB（无口机型整段关闭）。
-- 可选插件（passwall / openclash / mosdns / lucky / tailscale / 主题）全部以注释形式放在第 19 段，
-  由 `diy-part3.sh` 拉取，默认关闭。
-
-段落顺序：
-```
-target/包管理 → DEVICES → PON 内核驱动 → PON 用户态 → PON/IPTV LuCI
-→ nftables 网络转发 → 隧道拨号 → LuCI → 基础服务 → 系统工具
-→ 固件工具 → 内核模块 → 基础库 → 内核选项
-→ 13 光器件 → 14 NPU 卸载 → 15 WiFi → 16 USB → 17 PHY → 18 TF-A → 19 可选插件 → 20 其他
-```
 
 | 机型 | SoC | 光器件 | 2.5G PHY | WiFi | USB | 校准数据 |
 |------|-----|--------|----------|------|-----|----------|
