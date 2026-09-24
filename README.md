@@ -23,8 +23,6 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 开关在脚本开头，默认**全关**：`ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
 `ADD_TAILSCALE` / `ADD_OPENLIST` / `ADD_SMARTDNS`。
 
-`luci-theme-argon`（第 6 段已启用）和 `luci-app-argon-config` **直接用 feeds 自带的**，
-不再从 sbwml 拉新版，也不删 `feeds/luci/themes/luci-theme-argon`，避免同名包冲突与版本不一致。
 
 启用两步：① 脚本里开关改 `true`；② `configs/<机型>.config` 第 19 段把对应
 `# CONFIG_PACKAGE_xxx is not set` 改成 `=y`。

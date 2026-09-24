@@ -16,8 +16,6 @@ mkdir -p "$PKG_DIR"
 
 # ---------------------------------------------------------
 # 插件开关（默认全关）
-# 注：luci-theme-argon / luci-app-argon-config 直接用 feeds 自带的，
-#     不再从 sbwml 拉新版，也不删 feeds 里的目录
 # ---------------------------------------------------------
 ADD_PASSWALL=false     # luci-app-passwall（含依赖源）
 ADD_OPENCLASH=false    # luci-app-openclash ⚠ 依赖 Ruby/Rust，编译极慢
