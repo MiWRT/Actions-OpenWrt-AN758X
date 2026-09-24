@@ -87,7 +87,12 @@ git clone --depth=1 https://github.com/EasyTier/luci-app-easytier.git package/cu
 git clone --depth=1 https://github.com/Tokisaki-Galaxy/luci-app-tailscale-community.git package/custom/tailscale-community
 
 # 主题
+# 必须先删掉 feeds 自带版本，否则会与 package/custom 这份同名冲突，
+# 导致 configs 里 CONFIG_PACKAGE_luci-theme-argon=y 编译时用哪一份不确定
+rm -rf feeds/luci/themes/luci-theme-argon
+rm -rf feeds/luci/applications/luci-app-argon-config
 git clone --depth=1 -b openwrt-25.12 https://github.com/sbwml/luci-theme-argon.git package/custom/luci-theme-argon
+git clone --depth=1 https://github.com/sbwml/luci-app-argon-config.git package/custom/luci-app-argon-config
 
 git clone --depth=1 https://github.com/eamonxg/luci-theme-aurora.git package/custom/luci-theme-aurora
 git clone --depth=1 https://github.com/eamonxg/luci-app-aurora-config.git package/custom/luci-app-aurora-config
