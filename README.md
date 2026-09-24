@@ -1,154 +1,106 @@
-# AN7581 PonWrt 云编译仓库
-脚本参考有
+# PonWrt CI — Airoha AN758x PON 云编译
 
-https://github.com/VIKINGYFY/CloseWRT-CI
-
-https://github.com/yhlh9982/Actions-OpenWrt-MT798X
-
-源码地址：https://github.com/pbs05/ponwrt
-
-GitHub Actions 自动编译 Airoha AN7581 PON 设备固件，源码 `pbs05/ponwrt`（ImmortalWrt + AN7581 PON 支持，内核 6.18）。
+基于 P3TERX `Actions-OpenWrt` 模板重构，源码指向 [pbs05/ponwrt](https://github.com/pbs05/ponwrt)（默认分支 `master`），
+针对 AN7581 / AN7583 PON 光猫做机型选择、磁盘释放与工具链缓存。
 
 ## 目录结构
 
 ```
-.
-├── .github/workflows/build-an7581.yml   # 工作流：下拉选机型后编译
-├── configs/                             # 9 份单机型 .config
-│   ├── an7581-fiberhome_hg5382a.config
-│   ├── an7581-fiberhome_hg5585f-ct.config
-│   ├── an7581-fiberhome_hg5585f-cu.config
-│   ├── an7581-gemtek_xg2010g.config
-│   ├── an7581-nokia_xg-040g-md-ubi.config
-│   ├── an7581-nokia_xg-040g-tf-ubi.config
-│   ├── an7581-unionman_ung00a.config
-│   ├── an7581-znxt_zn504xg-d.config
-│   └── an7581-znxt_zn515xg-d.config
-├── diy-part1.sh                         # feeds 前：补齐 PON 两个 feed
-├── diy-part2.sh                         # config 阶段：主机名 / 时区 / 硬件卸载
-├── diy-part3.sh                         # feeds 后：拉取第三方插件（passwall/openclash/daed 等）
-└── README.md
+.github/workflows/build-ponwrt.yml     主构建流程（机型可选 / 释放空间 / 工具链缓冲）
+.github/workflows/cache-keepalive.yml  每 5 天 touch 缓存，防止被回收
+diy-part1.sh    feeds 之后执行：第三方源、libxcrypt/Rust 预处理
+diy-part2.sh    配置之后执行：主机名/时区/IP、ccache、sysctl 优化
+diy-part3.sh    可选插件拉取：argon 主题、passwall、openclash、mosdns 等（默认全关）
+diy-partX.sh    收尾：切断 Ruby→Rust 依赖链
+configs/        每机型一份精简 diffconfig（约 440 行，需 make defconfig 展开）
+files/          可选：自定义 rootfs 文件，会自动拷进源码
 ```
 
+## configs 说明
 
-## 刷机与 PON 板级数据（重要）
+每个机型一份 `configs/<profile>.config`，统一为**精简 diffconfig**（约 440 行），只写与 ponwrt 官方
+`configs/an7581.config` / `an7583.config` 基座的差异，流程里由 `Generate toolchain cache key` 步骤
+`make defconfig` 展开成完整 `.config`。
 
-ponwrt README 的流程：
+统一规则：
 
-1. 先用 **AN758x-Stock2UBI** 备份原厂 flash 并切换到 UBI 分区布局
-2. 刷入 PonWrt
-3. 恢复原厂校准与身份数据（二选一）：
-   - U-Boot Web 界面
-   - LuCI → Network → PON → Configuration → **PON board data**
+- **NPU 每机型都开**：AN7581 → `airoha-en7581-npu-firmware=y`，AN7583 → `airoha-an7583-npu-firmware=y`，
+  配合 `kmod-nft-offload` + `kmod-nf-flow` 走 PPE 硬件转发（PON 与以太网共用 NPU）。
+- **全部走 ImmortalWrt 组件**：`dnsmasq-full`、`firewall4`、`nftables-json`、`autocore`、`shellsync`、
+  `luci-app-package-manager`、`apk-openssl`。网络栈只有 nftables（`kmod-nft-*` / `kmod-nf-*`），
+  不引入 iptables，也不引入 OpenWrt 官方 feed 的包；PON 相关全部来自 `pon_drivers` / `pon_userspace`。
+- **按 DTS 硬件逐机型裁剪**：光器件（FiberHome BOSA / EN7572 二选一）、PHY（GPY211 / EN8811H / RTL8261N）、
+  WiFi（仅 hg5585f-ct/cu 与 zn515 有 MT7916D）、USB（无口机型整段关闭）。
+- 可选插件（passwall / openclash / mosdns / lucky / tailscale / 主题）全部以注释形式放在第 19 段，
+  由 `diy-part3.sh` 拉取，默认关闭。
 
-各机型的备份类型不同，恢复时要对上：
-
-| 机型 | 备份类型 | 说明 |
-|---|---|---|
-| 烽火 HG5382A / HG5585F-CT / HG5585F-CU | `factory` | 需先用 **FiberHome Factory** 转换，再恢复到 PonWrt 的 factory 卷 |
-| 智易 XG2010G | `dsd` | 恢复到 factory 卷 |
-| 诺基亚贝尔 XG-040G-MD / TF | `bosa`, `ri` | 恢复到同名卷 |
-| 九联 UNG00A / 兆能 ZN504XG-D / ZN515XG-D | `reservearea` | 恢复到 factory 卷 |
-
-不恢复板级数据，PON 光口通常无法注册。
-
-## defconfig 与构建校验
-
-工作流**已包含 `make defconfig`**（在「载入 .config 与 diy-part2.sh」步骤末尾），精简配置必须经它展开成完整 `.config` 才能编译。
-
-defconfig 之后还有一步「校验 defconfig 展开结果」，会硬检查：
-
-- 目标机型数量恰好为 1
-- 光器件驱动 `en7572` / `paged-bosa` 恰好开一个
-- PON 必选包全部存在：`kmod-airoha-xpon`、`kmod-airoha-pon-frontend`、`airoha-pond`、`airoha-ponctl`、`airoha-pon-debug`、`luci-app-pon`、`luci-app-iptv`
-  - 包名写错时 kconfig 会**静默丢弃**，这一步能把它兜住，几十秒就报错，不用等 1–2 小时
-
-任一项不满足则直接失败退出。
-
-本地编译：
-
-```bash
-git clone https://github.com/pbs05/ponwrt.git && cd ponwrt
-./scripts/feeds update -a && ./scripts/feeds install -a
-cp configs/an7581-fiberhome_hg5585f-cu.config .config
-make defconfig          # 精简配置必须跑这一步展开
-make -j$(nproc)
+段落顺序：
+```
+target/包管理 → DEVICES → PON 内核驱动 → PON 用户态 → PON/IPTV LuCI
+→ nftables 网络转发 → 隧道拨号 → LuCI → 基础服务 → 系统工具
+→ 固件工具 → 内核模块 → 基础库 → 内核选项
+→ 13 光器件 → 14 NPU 卸载 → 15 WiFi → 16 USB → 17 PHY → 18 TF-A → 19 可选插件 → 20 其他
 ```
 
-## 机型与光器件驱动
+| 机型 | SoC | 光器件 | 2.5G PHY | WiFi | USB | 校准数据 |
+|------|-----|--------|----------|------|-----|----------|
+| fiberhome_hg5382a | AN7581 | FiberHome BOSA (GN28L95/UX3363) | GPY211 | 无 | 无 | factory |
+| fiberhome_hg5585f-ct | AN7581 | FiberHome BOSA | GPY211 | MT7916D | USB0(3.0)+USB1(2.0) | factory |
+| fiberhome_hg5585f-cu | AN7581 | FiberHome BOSA | GPY211 | MT7916D | USB0(3.0)+USB1(2.0) | factory |
+| gemtek_xg2010g | AN7581 | EN7572 | EN8811H + 2×RTL8261N | 无 | 无 | dsd |
+| unionman_ung00a | AN7581 | EN7572 | EN8811H | 无 | 无 | reservearea |
+| nokia_xg-040g-md-ubi | AN7581 | EN7572 | EN8811H | 无 | USB0+USB1（5V 可控） | bosa, ri |
+| nokia_xg-040g-tf-ubi | AN7581 | EN7572 | EN8811H | 无 | USB0+USB1（无 5V 控制） | bosa, ri |
+| znxt_zn504xg-d | AN7581 | EN7572 | EN8811H + 3×GE | 无 | USB1 | reservearea |
+| znxt_zn515xg-d | AN7581 | EN7572 | EN8811H + 3×GE | MT7916D | USB1+USB2 | reservearea |
+| nokia_xg-040g-mf | AN7583 | EN7572 | EN8811H | 无 | USB0 | bosa, ri |
+| nokia_xg-040g-mf-ubi | AN7583 | EN7572 | EN8811H | 无 | USB0 | bosa, ri |
 
-光器件驱动两颗互斥，已按硬件写进每份配置，无需再改：
+加减插件：把 `# CONFIG_PACKAGE_x is not set` 改成 `CONFIG_PACKAGE_x=y` 即开启，反向即关闭。
 
-| 机型 | profile | 光器件驱动 |
-|---|---|---|
-| 烽火 HG5382A | `fiberhome_hg5382a` | `kmod-airoha-paged-bosa`（GN28L95 / UX3363） |
-| 烽火 HG5585F 电信版 | `fiberhome_hg5585f-ct` | `kmod-airoha-paged-bosa` |
-| 烽火 HG5585F 联通版 | `fiberhome_hg5585f-cu` | `kmod-airoha-paged-bosa` |
-| 智易 XG2010G | `gemtek_xg2010g` | `kmod-airoha-en7572` |
-| 诺基亚贝尔 XG-040G-MD | `nokia_xg-040g-md-ubi` | `kmod-airoha-en7572` |
-| 诺基亚贝尔 XG-040G-TF | `nokia_xg-040g-tf-ubi` | `kmod-airoha-en7572` |
-| 九联 UNG00A | `unionman_ung00a` | `kmod-airoha-en7572` |
-| 兆能 ZN504XG-D | `znxt_zn504xg-d` | `kmod-airoha-en7572` |
-| 兆能 ZN515XG-D | `znxt_zn515xg-d` | `kmod-airoha-en7572` |
+## 用法
 
-## diy-part3.sh —— 第三方插件
+1. Fork 本仓库，Settings → Actions 打开 Workflow 权限（Read and write）。
+2. Actions → `Build PonWrt (Airoha AN758x PON)` → Run workflow，选参数：
 
-`diy-part3.sh` 在 **`feeds install` 之后、载入 `.config` 之前**执行（顺序不能变）：它会 `rm -rf` feeds 里若干包（golang、mosdns、smartdns、xray-core 等）再 clone 新版，并把插件 clone 到 `package/custom/`。
+| 参数 | 说明 |
+|------|------|
+| `branch` | ponwrt 源码分支，默认 `master` |
+| `soc` | `an7581` / `an7583`，选 `all` 机型时生效，其他情况按机型自动校正 |
+| `profile` | 机型，默认 `fiberhome_hg5585f-cu`；`all` = 全机型编译 |
+| `scope` | `firmware` 出固件；`toolchain-only` 只编译并缓存工具链 |
+| `ignore_cache` | `true` 时忽略缓存强制重编工具链 |
+| `ssh` | `true` 进入 tmate 调试 |
 
-拉完会自动再跑一次 `./scripts/feeds install -a` 修复被删目录的符号链接，并检查 `package/custom` 与 feeds 是否有同名包重复定义（有则打 warning）。
+3. 产物：Artifacts（`OpenWrt_firmware_ponwrt-<soc>-<profile>_<时间>`）+ Release（`ponwrt-<soc>-<profile>-<branch>-<时间戳>`）。
 
-拉到的插件在 `configs/*.config` **第 12 段**，默认全部注释掉 —— 不启用就不会编译、不影响 PON 功能。要用哪个就把对应行取消注释。
+## 支持的机型
 
+| SoC | profile |
+|-----|---------|
+| AN7581 | `fiberhome_hg5382a` `fiberhome_hg5585f-ct` `fiberhome_hg5585f-cu` `gemtek_xg2010g` `nokia_xg-040g-md-ubi` `nokia_xg-040g-tf-ubi` `unionman_ung00a` `znxt_zn504xg-d` `znxt_zn515xg-d` |
+| AN7583 | `nokia_xg-040g-mf` `nokia_xg-040g-mf-ubi` |
 
-## 分支与源码
+机型名写错会在 `Generate toolchain cache key` 步骤直接报 `::error::` 并退出，不会静默地全机型编译。
 
-仓库 `pbs05/ponwrt` 只有 1 个分支 **`master`**（无 `main`），最新提交 `18d7b41`。`REPO_URL` 在 `.github/workflows/build-an7581.yml` 的 `env` 里硬编码为 `https://github.com/pbs05/ponwrt.git`，想换成自己的 fork 改这一行即可。
+## 工具链缓存机制
 
-分支通过 `repo_branch` 输入项选择，默认 `master`。克隆前会先用 `git ls-remote --heads` 校验分支是否存在，填错时日志会打印该仓库实际可用的分支列表，不会默默卡住。
+- Key：`ponwrt-toolchain-<board>-<subtarget>-<tools/toolchain 源码 md5 前 16 位>`，源码工具链一变就失效重编。
+- 命中顺序：`actions/cache` → 仓库 `toolchain-cache` Release 备份 → 本地编译。
+- Release 命中后会回写 `actions/cache`，下次构建走快通道。
+- 命中缓存时用 `sed -i 's/ $(tool.*\/stamp-compile)//' Makefile` 跳过工具链重编。
+- 额外缓存：`.ccache`（编译缓存）、`dl`（软件包下载目录）。
 
-## 配置格式说明
+## 首次使用建议
 
-`configs/*.config` 是**精简配置（diffconfig）**：只列出相对 target 默认值有改动、或需要显式指定的项，其余交给 `make defconfig` 按 target 默认展开。
+免费 runner 单次上限 6 小时，首次全量编译（工具链 + 内核 + 全包）大概率超时：
 
-每份约 209 行（全量展开后是 9000 行）。好处是改起来一眼能看全，坏处是**不能直接用**——必须先跑 `make defconfig`。工作流里已经包含这一步，本地编译也要记得跑。
-
-分 11 段，和 MT798X 那套 `.config` 的组织方式一致：
-
-| 段 | 内容 |
-|---|---|
-| DEVICES | 目标机型 profile |
-| 基础构建选项 | target / 内核 6.18 / rootfs / debugfs |
-| 1. PON 内核驱动 | `kmod-airoha-xpon`、`kmod-airoha-pon-frontend` |
-| 2. 光器件驱动 | 按机型二选一，注释写明本机型选了哪颗 |
-| 3. PON 用户态 | `airoha-pond`（OMCI/OAM 主守护）、`airoha-ponctl`（光功率/温度查询）、`airoha-pon-debug`（抓包诊断） |
-| 4. PON/IPTV LuCI | `luci-app-pon`（板级身份编辑）、`luci-app-iptv`（IPTV 桥接）+ 中文包 |
-| 5. 硬件卸载 | NPU 固件、`kmod-nft-offload`、`kmod-nf-conntrack-bridge` |
-| 6. 有线 PHY / WiFi | EN8811H 2.5G、RTL826x 固件、MT7916、wpad-openssl、fitblk |
-| 7. LuCI 界面 | luci + 各 mod + argon 主题 + 中文包 |
-| 8. 基础服务与工具 | dnsmasq-full、pppoe、iperf3、tcpdump、i2c-tools、uboot-envtools 等 |
-| 9. 存储 / USB / eMMC / M.2 | **默认全部注释掉**，按需取消注释 |
-| 10. 网络 / 内核杂项 | cgroup、BBR、nft/ipt 增强、zram |
-| 11. MISC | 编译强化选项、fastpath 取舍 |
-
-每段里的 `=y` / `=m` 后面带中文行内注释，说明这个包干什么用。
-
-## PON 协议支持情况
-
-`kmod-airoha-xpon` 上游给出的状态：
-
-| 模式 | 状态 |
-|---|---|
-| XG-PON | ✅ 已测试 |
-| 10G-EPON 10G/1G | ✅ 已测试 |
-| XGS-PON | ❓ 未测试 |
-| 10G-EPON 10G/10G | ❓ 未测试 |
-| GPON | ❌ 未实现 |
-| EPON 1G/1G | ❌ 未实现 |
+1. 先跑一次 `scope = toolchain-only`，把工具链缓存建起来；
+2. 再跑一次 `scope = firmware` 出固件；
+3. 若仍超时，把 `configs/*.config` 里不需要的 luci-app / 语言包删掉再提交。
 
 ## 注意事项
 
-- **构建时长**：单机型 1–2 小时（冷启动含工具链），不会撞 Actions 6 小时上限。换机型重编可复用工具链缓存。
-- **缓存**：按源码 commit hash 缓存 `staging_dir`。源码更新后想全量重编，勾 Run workflow 里的 `clean_cache`。
-- **刷机**：首次建议先 initramfs 引导再 sysupgrade；跨版本升级不要保留配置，刷完按住 reset 8 秒复位一次。
-- **硬件卸载**：装完后要在 firewall 里确认 `flow_offloading_hw` 为 1，否则 PPE 表项建不起来。
-- **PON 光口**：需要 pond 起来并完成 OMCI/OAM 注册；注册失败时用 `airoha-pon-debug` 抓包，配合 `ponctl` 看光功率和 ONU 状态。
+- 刷机前用 [AN758x-Stock2UBI](https://github.com/pbs05) 备份原厂 flash；烽火 `factory` 备份需先过 `FiberHome Factory` 转换。
+- 刷完后通过 U-Boot Web 或 LuCI → 网络 → PON → Configuration → PON board data 恢复校准/身份数据，否则 WiFi 与 PON  Registration 异常。
+- `toolchain-cache` Release 由流程自动维护，`Remove old releases` 用 `delete_tag_pattern: ^<DEVICE_NAME>-` 限定，不会误删。
