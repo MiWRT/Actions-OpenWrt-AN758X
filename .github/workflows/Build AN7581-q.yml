@@ -38,7 +38,6 @@ env:
   REPO_URL: https://github.com/pbs05/ponwrt.git
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  DIY_P3_SH: diy-part3.sh
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
@@ -140,48 +139,25 @@ jobs:
         cd openwrt
         echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
 
-    - name: 补齐 PON feeds（diy-part1.sh）
-      run: |
-        cd openwrt
-        if [ -f "$GITHUB_WORKSPACE/$DIY_P1_SH" ]; then
-          cp "$GITHUB_WORKSPACE/$DIY_P1_SH" ./
-          chmod +x "$DIY_P1_SH"
-          ./$DIY_P1_SH
-        else
-          echo "::warning::未找到 $DIY_P1_SH，跳过；使用源码自带 feeds 配置"
-        fi
-        echo "===== feeds 配置 ====="
-        # ponwrt 可能用 feeds.conf 而非 feeds.conf.default，硬编码 cat 会踩空
-        if [ -f feeds.conf.default ]; then cat feeds.conf.default
-        elif [ -f feeds.conf ]; then cat feeds.conf
-        else echo "::warning::未找到任何 feeds 配置文件"; fi
-        echo "===== PON feed 是否就位 ====="
-        grep -E "pon_drivers|pon_userspace" feeds.conf.default feeds.conf 2>/dev/null \
-          || echo "::warning::未发现 pon_drivers / pon_userspace feed，PON 相关包将无法编译"
-
     - name: 更新并安装 feeds
       run: |
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    # diy-part3 必须在 feeds install 之后执行：
-    # 它会 rm -rf feeds 里的某些包（如 golang、mosdns）并 clone 新包到 package/custom
-    - name: 拉取第三方插件（diy-part3.sh）
+    - name: 拉取第三方插件（diy-part1.sh）
       run: |
         cd openwrt
-        if [ -f "$GITHUB_WORKSPACE/$DIY_P3_SH" ]; then
-          cp "$GITHUB_WORKSPACE/$DIY_P3_SH" ./
-          chmod +x "$DIY_P3_SH"
-          ./$DIY_P3_SH || echo "::warning::$DIY_P3_SH 执行中有命令失败，继续流程"
+        if [ -f "$GITHUB_WORKSPACE/$DIY_P1_SH" ]; then
+          cp "$GITHUB_WORKSPACE/$DIY_P1_SH" ./
+          chmod +x "$DIY_P1_SH"
+          ./$DIY_P1_SH || echo "::warning::$DIY_P1_SH 执行中有命令失败，继续流程"
         else
-          echo "::warning::未找到 $DIY_P3_SH，跳过第三方插件"
+          echo "::warning::未找到 $DIY_P1_SH，跳过第三方插件"
         fi
         echo "===== package/custom ====="
         ls -la package/custom 2>/dev/null || true
-        # 重新 install，修复被 diy-part3 删掉又重建的 feed 包符号链接
         ./scripts/feeds install -a
-        # 检查同名包重复定义（feeds 与 custom 同时存在同名包会导致冲突）
         echo "===== 重复包检查 ====="
         for d in package/custom/*/; do
           n=$(basename "$d")
