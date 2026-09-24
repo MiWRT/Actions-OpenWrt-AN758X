@@ -89,9 +89,9 @@ make -j$(nproc)
 | 智易 XG2010G | `gemtek_xg2010g` | `kmod-airoha-en7572` |
 | 诺基亚贝尔 XG-040G-MD | `nokia_xg-040g-md-ubi` | `kmod-airoha-en7572` |
 | 诺基亚贝尔 XG-040G-TF | `nokia_xg-040g-tf-ubi` | `kmod-airoha-en7572` |
-| 广东联动 UNG00A | `unionman_ung00a` | `kmod-airoha-en7572` |
-| 中兴 ZN504XG-D | `znxt_zn504xg-d` | `kmod-airoha-en7572` |
-| 中兴 ZN515XG-D | `znxt_zn515xg-d` | `kmod-airoha-en7572` |
+| 九联 UNG00A | `unionman_ung00a` | `kmod-airoha-en7572` |
+| 兆能 ZN504XG-D | `znxt_zn504xg-d` | `kmod-airoha-en7572` |
+| 兆能 ZN515XG-D | `znxt_zn515xg-d` | `kmod-airoha-en7572` |
 
 ## 已修的问题（排查记录）
 
