@@ -1,4 +1,4 @@
-name: Build AN7581 PonWrt
+name: Build AN7581 PonWrt-q
 
 on:
   workflow_dispatch:
