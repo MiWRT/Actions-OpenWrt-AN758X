@@ -8,7 +8,7 @@
 ```
 .github/workflows/build-ponwrt.yml     主构建流程（机型可选 / 释放空间 / 工具链缓冲）
 .github/workflows/cache-keepalive.yml  每 5 天 touch 缓存，防止被回收
-diy-part1.sh    拉取可选插件到 package/custom（argon/passwall/openclash/mosdns/lucky/tailscale 等，默认全关）
+diy-part1.sh    拉取可选插件到 package/custom（passwall/openclash/mosdns/lucky/tailscale 等，默认全关）
 diy-part2.sh    把默认时区改成中国（Asia/Shanghai, CST-8）
 configs/        每机型一份精简 diffconfig（约 440 行，需 make defconfig 展开）
 files/          可选：自定义 rootfs 文件，会自动拷进源码
@@ -20,9 +20,11 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 
 ### diy-part1.sh —— 拉插件
 
-开关在脚本开头，默认只开 `ADD_ARGON=true`（sbwml 新版 argon 主题，会先 `rm -rf feeds/luci/themes/luci-theme-argon`
-再拉，避免同名包冲突）。其余 `ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
-`ADD_TAILSCALE` / `ADD_OPENLIST` / `ADD_SMARTDNS` 默认 false。
+开关在脚本开头，默认**全关**：`ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
+`ADD_TAILSCALE` / `ADD_OPENLIST` / `ADD_SMARTDNS`。
+
+`luci-theme-argon`（第 6 段已启用）和 `luci-app-argon-config` **直接用 feeds 自带的**，
+不再从 sbwml 拉新版，也不删 `feeds/luci/themes/luci-theme-argon`，避免同名包冲突与版本不一致。
 
 启用两步：① 脚本里开关改 `true`；② `configs/<机型>.config` 第 19 段把对应
 `# CONFIG_PACKAGE_xxx is not set` 改成 `=y`。
