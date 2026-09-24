@@ -136,14 +136,7 @@ jobs:
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
-        
-    - name: Load custom configuration (diy-part3.sh)
-      run: |
-        [ -e "$CONFIG_FILE" ] && cp "$CONFIG_FILE" openwrt/.config
-        chmod +x "$DIY_P3_SH"
-        cd openwrt
-        "$GITHUB_WORKSPACE/$DIY_P3_SH"
-        
+                
     - name: 载入 .config 与 diy-part2.sh
       run: |
         cd openwrt
