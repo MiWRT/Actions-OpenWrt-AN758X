@@ -236,23 +236,38 @@ jobs:
         "$GITHUB_WORKSPACE/$DIY_P1_SH"
 
     # =========================================================
-    # 6. 加载 .config (优先用 CI 仓库里的，缺省用源码自带)
+    # 6. 加载 .config —— 源码基座 defconfig 打底 + 机型精简配置追加
     # =========================================================
     - name: Load custom configuration
       run: |
         cd "$BUILD_ROOT/openwrt"
         [ -e "$GITHUB_WORKSPACE/files" ] && cp -r "$GITHUB_WORKSPACE/files" files
 
-        # 优先本机型的 config，其次 SoC 通用 config，最后回退源码自带
-        if [ -e "$GITHUB_WORKSPACE/${CONFIG_FILE}" ]; then
-          cp "$GITHUB_WORKSPACE/${CONFIG_FILE}" .config
-          echo "使用机型配置: ${CONFIG_FILE}"
-        elif [ -e "$GITHUB_WORKSPACE/configs/${SOC}.config" ]; then
-          cp "$GITHUB_WORKSPACE/configs/${SOC}.config" .config
-          echo "使用 SoC 通用配置: configs/${SOC}.config"
-        else
+        # =========================================================
+        # 关键：先用源码自带的 configs/<soc>.config 基座打底
+        # 精简配置只写差异，很多符号（如 LUCI_LANG_zh_Hans、TAR_*、
+        # MAC80211_*）是 tristate 且无 default，默认 n。若直接拿精简
+        # 配置当 .config，defconfig 会把它们重置成 n，导致中文包丢失。
+        # 先铺基座再追加差异，基座所有非默认值都保留，后写的覆盖先写的。
+        # =========================================================
+        if [ -f "configs/${SOC}.config" ]; then
           cp "configs/${SOC}.config" .config
-          echo "使用源码自带配置: configs/${SOC}.config"
+          echo "✅ 已用源码基座 defconfig 打底: configs/${SOC}.config"
+        else
+          : > .config
+          echo "::warning::源码中无 configs/${SOC}.config，仅用精简配置"
+        fi
+
+        # 再追加工型精简配置（其中的 =y / is not set 会覆盖基座）
+        if [ -e "$GITHUB_WORKSPACE/${CONFIG_FILE}" ]; then
+          cat "$GITHUB_WORKSPACE/${CONFIG_FILE}" >> .config
+          echo "✅ 已追加机型配置: ${CONFIG_FILE}"
+        elif [ -e "$GITHUB_WORKSPACE/configs/${SOC}.config" ]; then
+          cat "$GITHUB_WORKSPACE/configs/${SOC}.config" >> .config
+          echo "✅ 已追加 SoC 通用配置"
+        else
+          echo "::error::找不到机型配置 ${CONFIG_FILE}"
+          exit 1
         fi
 
     # =========================================================
@@ -265,8 +280,8 @@ jobs:
         if [ "${PROFILE}" = "all" ]; then
           echo "全机型编译，不做裁剪"
         else
-          # 清掉所有设备选中项，再单独打开目标机型
-          sed -i '/^CONFIG_TARGET_DEVICE_/d; /^CONFIG_TARGET_MULTI_PROFILE=/d' .config
+          # 清掉所有设备选中项（含 is not set 行），再单独打开目标机型
+          sed -i '/CONFIG_TARGET_DEVICE_/d; /^CONFIG_TARGET_MULTI_PROFILE=/d' .config
           {
             echo "CONFIG_TARGET_MULTI_PROFILE=y"
             echo "CONFIG_TARGET_DEVICE_airoha_${SOC}_DEVICE_${PROFILE}=y"
