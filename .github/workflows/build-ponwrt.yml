@@ -5,19 +5,20 @@ name: Build PonWrt (Airoha AN758x PON)
 #   - 源码: https://github.com/pbs05/ponwrt (默认分支 master)
 #   - 支持 AN7581 / AN7583 全机型选择
 #   - 磁盘空间释放 + 工具链双通道缓存(actions/cache + Release 备份)
-#   - diy-part1 / diy-part2 / diy-partX 三段式定制
+#   - diy-part1 拉插件 / diy-part2 改中国时区
 # =========================================================
 
 env:
+  # 编译根目录：必须静态定义（供 actions/cache 的 path 使用）
+  BUILD_ROOT: /workdir
   REPO_URL: https://github.com/pbs05/ponwrt
   FEEDS_CONF: ''                       # 留空=使用源码自带 feeds.conf.default(含 pon_drivers/pon_userspace)
-  DIY_P1_SH: diy-part1.sh
-  DIY_P2_SH: diy-part2.sh
-  DIY_P3_SH: diy-part3.sh
-  DIY_P4_SH: diy-partX.sh
+  DIY_P1_SH: diy-part1.sh      # 拉取可选插件
+  DIY_P2_SH: diy-part2.sh      # 时区改为中国
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
+  # 由 upload_release 输入控制，手动运行时默认 true
+  UPLOAD_RELEASE: ${{ github.event.inputs.upload_release || 'true' }}
   USE_DL_CACHE: true                   # 缓存 dl 下载目录
   USE_CCACHE: true                     # 开启 ccache 并缓存
   TZ: Asia/Shanghai
@@ -80,6 +81,14 @@ on:
         options:
           - 'false'
           - 'true'
+      upload_release:
+        description: '固件发布到 Release（false 则只传 Artifact）'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
       ssh:
         description: 'SSH connection to Actions'
         required: false
@@ -168,16 +177,12 @@ jobs:
         sudo -E apt-get -yqq clean
         sudo -E timedatectl set-timezone "$TZ"
 
-        # --- 选择剩余空间最大的分区作为编译根目录 ---
-        ROOT_AVAIL=$(df -P /      | awk 'NR==2{print $4}')
-        MNT_AVAIL=$(df -P /mnt 2>/dev/null | awk 'NR==2{print $4}')
-        BUILD_ROOT=/workdir
-        if [ -n "$MNT_AVAIL" ] && [ "$MNT_AVAIL" -gt "$ROOT_AVAIL" ]; then
-          BUILD_ROOT=/mnt/ponwrt
-        fi
-        sudo mkdir -p "$BUILD_ROOT"
-        sudo chown "$USER":"$USER" "$BUILD_ROOT"
-        echo "BUILD_ROOT=$BUILD_ROOT" >> "$GITHUB_ENV"
+        # --- 编译根目录（固定 /workdir，与 workflow 级 env 保持一致）---
+        # 注意：BUILD_ROOT 必须是 workflow 级静态变量，不能用 GITHUB_ENV 动态写入，
+        # 否则 actions/cache 的 with.path 里 ${{ env.BUILD_ROOT }} 会解析成空串，
+        # dl 缓存命中不到 /openwrt/dl，导致工具链编译时源码包缺失。
+        sudo mkdir -p /workdir
+        sudo chown "$USER":"$USER" /workdir
 
         echo "磁盘空间:"; df -hT
         echo "内存/Swap:"; free -h
@@ -201,10 +206,13 @@ jobs:
       uses: actions/cache@v5
       continue-on-error: true
       with:
-        path: ${{ env.BUILD_ROOT }}/openwrt/dl
-        key: ponwrt-dl-${{ env.REPO_BRANCH }}-${{ github.run_id }}
+        path: /workdir/openwrt/dl
+        # 按分支 + 周数：同一周内复用，避免每次 run_id 都新建缓存条目
+        key: ponwrt-dl-${{ github.event.inputs.branch || 'master' }}-${{ github.run_number }}
         restore-keys: |
-          ponwrt-dl-${{ env.REPO_BRANCH }}-
+          ponwrt-dl-${{ github.event.inputs.branch || 'master' }}-
+        # 关键：即使后面编译失败也要保住已下载的源码包
+        save-always: true
 
     # =========================================================
     # 4. 更新并安装 Feeds
@@ -219,9 +227,9 @@ jobs:
         ./scripts/feeds install -a
 
     # =========================================================
-    # 5. diy-part1.sh (feeds 之后，配置之前)
+    # 5. diy-part1.sh —— 拉取可选插件
     # =========================================================
-    - name: Load custom feeds (diy-part1.sh)
+    - name: Pull optional plugins (diy-part1.sh)
       run: |
         cd "$BUILD_ROOT/openwrt"
         chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
@@ -268,34 +276,16 @@ jobs:
         fi
 
     # =========================================================
-    # 8. diy-part2.sh (配置定制)
+    # 8. diy-part2.sh —— 时区改为中国
     # =========================================================
-    - name: Load custom configuration (diy-part2.sh)
+    - name: Set timezone to China (diy-part2.sh)
       run: |
         cd "$BUILD_ROOT/openwrt"
         chmod +x "$GITHUB_WORKSPACE/$DIY_P2_SH"
         "$GITHUB_WORKSPACE/$DIY_P2_SH"
 
     # =========================================================
-    # 8.5 diy-part3.sh (可选第三方插件拉取)
-    # =========================================================
-    - name: Load custom packages (diy-part3.sh)
-      run: |
-        cd "$BUILD_ROOT/openwrt"
-        chmod +x "$GITHUB_WORKSPACE/$DIY_P3_SH"
-        "$GITHUB_WORKSPACE/$DIY_P3_SH"
-
-    # =========================================================
-    # 9. diy-partX.sh (收尾修补)
-    # =========================================================
-    - name: Load custom configuration (diy-partX.sh)
-      run: |
-        cd "$BUILD_ROOT/openwrt"
-        chmod +x "$GITHUB_WORKSPACE/$DIY_P4_SH"
-        "$GITHUB_WORKSPACE/$DIY_P4_SH"
-
-    # =========================================================
-    # 10. defconfig + 生成工具链缓存 Key + 校验机型
+    # 9. defconfig + 生成工具链缓存 Key + 校验机型
     # =========================================================
     - name: Generate toolchain cache key
       id: cache-key
@@ -348,7 +338,47 @@ jobs:
         echo "========================================"
 
     # =========================================================
-    # 11. 恢复工具链 —— 第一优先 actions/cache
+    # 9.5 下载工具链源码 —— 必须在编工具链之前
+    #     报错 "Can't open dl/musl-1.2.6.tar.gz" 就是这一步缺失导致的：
+    #     make toolchain/install 不会自动补下载，只会去解压 dl 里已有的包
+    # =========================================================
+    - name: Download toolchain sources
+      run: |
+        cd "$BUILD_ROOT/openwrt"
+
+        for i in 1 2 3; do
+          echo "===== 第 $i 次尝试: tools/toolchain download ====="
+          if make tools/download toolchain/download -j8; then
+            echo "✅ 下载完成"
+            break
+          fi
+          echo "::warning::第 $i 次下载失败，5 秒后重试"
+          sleep 5
+        done
+
+        # 清理下载失败残留的小文件，否则解压时报 "does not look like a tar archive"
+        echo "--- 清理损坏的下载包 ---"
+        find dl -size -1024c -type f -exec ls -l {} \; 2>/dev/null
+        find dl -size -1024c -type f -exec rm -f {} \; 2>/dev/null
+
+        echo "dl 目录共 $(ls -1 dl 2>/dev/null | wc -l) 个文件"
+        ls -lh dl 2>/dev/null | head -20
+
+        # 工具链三大件强校验，缺了直接失败，别等到解压时才报
+        MISS=""
+        for pat in "musl-*.tar.gz" "gcc-*" "binutils-*"; do
+          if ! ls dl/$pat >/dev/null 2>&1; then
+            MISS="$MISS $pat"
+          fi
+        done
+        if [ -n "$MISS" ]; then
+          echo "::error::工具链源码缺失:$MISS 请检查网络或 dl 缓存"
+          exit 1
+        fi
+        echo "✅ 工具链源码校验通过"
+
+    # =========================================================
+    # 10. 恢复工具链 —— 第一优先 actions/cache
     # =========================================================
     - name: Restore toolchain from actions/cache
       if: env.IGNORE_CACHE != 'true'
@@ -361,7 +391,7 @@ jobs:
         key: ${{ steps.cache-key.outputs.CACHE_KEY }}
 
     # =========================================================
-    # 12. 恢复工具链 —— 第二优先 Release 备份
+    # 11. 恢复工具链 —— 第二优先 Release 备份
     # =========================================================
     - name: Restore toolchain from Release backup
       if: env.IGNORE_CACHE != 'true' && steps.cache-restore.outputs.cache-hit != 'true'
@@ -394,7 +424,7 @@ jobs:
         fi
 
     # =========================================================
-    # 13. 处理工具链
+    # 12. 处理工具链
     # =========================================================
     - name: Handle toolchain
       id: toolchain
@@ -428,7 +458,7 @@ jobs:
         sed -i 's/ $(tool.*\/stamp-compile)//' Makefile
 
     # =========================================================
-    # 14. 保存工具链到 actions/cache
+    # 13. 保存工具链到 actions/cache
     # =========================================================
     - name: Save toolchain to actions/cache
       uses: actions/cache/save@v5
@@ -440,7 +470,7 @@ jobs:
         key: ${{ steps.cache-key.outputs.CACHE_KEY }}
 
     # =========================================================
-    # 15. 保存工具链到 Release 备份
+    # 14. 保存工具链到 Release 备份
     # =========================================================
     - name: Save toolchain to Release backup
       if: steps.toolchain.outputs.need_save_release == 'true'
@@ -469,7 +499,7 @@ jobs:
         rm -f "${CACHE_KEY}.tzst"
 
     # =========================================================
-    # 16. ccache 缓存
+    # 15. ccache 缓存
     # =========================================================
     - name: Cache ccache
       if: env.USE_CCACHE == 'true' && env.BUILD_SCOPE != 'toolchain-only'
@@ -482,14 +512,14 @@ jobs:
           ponwrt-ccache-${{ env.SOC }}-
 
     # =========================================================
-    # 17. SSH 调试
+    # 16. SSH 调试
     # =========================================================
     - name: SSH connection to Actions
       uses: mxschmitt/action-tmate@v3
       if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false') || contains(github.event.action, 'ssh')
 
     # =========================================================
-    # 18. 下载软件包
+    # 17. 下载软件包
     # =========================================================
     - name: Download packages
       id: package
@@ -497,12 +527,18 @@ jobs:
       run: |
         cd "$BUILD_ROOT/openwrt"
         make defconfig
-        make download -j8 || make download -j1 V=s
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+        for i in 1 2 3; do
+          echo "===== 第 $i 次尝试: make download ====="
+          if make download -j8; then break; fi
+          sleep 5
+        done
+        # 清理下载失败残留的小文件
+        find dl -size -1024c -type f -exec ls -l {} \; 2>/dev/null
+        find dl -size -1024c -type f -exec rm -f {} \; 2>/dev/null
+        echo "dl 目录共 $(ls -1 dl 2>/dev/null | wc -l) 个文件"
 
     # =========================================================
-    # 19. 编译固件
+    # 18. 编译固件
     # =========================================================
     - name: Compile the firmware
       id: compile
@@ -528,14 +564,14 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> "$GITHUB_ENV"
 
     # =========================================================
-    # 20. 空间检查
+    # 19. 空间检查
     # =========================================================
     - name: Check space usage
       if: (!cancelled())
       run: df -hT
 
     # =========================================================
-    # 21. 上传 bin 目录
+    # 20. 上传 bin 目录
     # =========================================================
     - name: Upload bin directory
       uses: actions/upload-artifact@v5
@@ -545,7 +581,7 @@ jobs:
         path: openwrt/bin
 
     # =========================================================
-    # 22. 整理并上传固件
+    # 21. 整理并上传固件
     # =========================================================
     - name: Organize files
       id: organize
@@ -564,12 +600,18 @@ jobs:
         path: ${{ env.FIRMWARE }}
 
     # =========================================================
-    # 23. 生成 Release 说明
+    # 22. 生成 Release 说明
     # =========================================================
     - name: Generate release tag
       id: tag
       if: env.UPLOAD_RELEASE == 'true' && steps.compile.outputs.status == 'success'
       run: |
+        # 没产出固件就别发空 Release
+        if [ -z "$FIRMWARE" ] || [ -z "$(ls -A "$FIRMWARE" 2>/dev/null)" ]; then
+          echo "::warning::固件目录为空，跳过 Release"
+          exit 0
+        fi
+
         BUILD_TIME=$(date +"%Y%m%d-%H%M")
         RELEASE_TAG=$(echo "${DEVICE_NAME}-${REPO_BRANCH}-${BUILD_TIME}" | sed 's/[^a-zA-Z0-9._-]/-/g')
         echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
@@ -588,8 +630,14 @@ jobs:
           echo "| 提交 | \`$(cd "$BUILD_ROOT"/openwrt && git rev-parse --short HEAD)\` |"
           echo "| 编译时间 | $(date '+%Y-%m-%d %H:%M:%S') (Shanghai) |"
           echo ""
+          echo "### 固件文件校验"
+          echo '```' >> release.txt
+          (cd "$FIRMWARE" && sha256sum * 2>/dev/null | grep -vE "sha256sums|packages") >> release.txt
+          echo '```' >> release.txt
+          echo ""
           echo "---"
           echo "> 安装前请用 AN758x-Stock2UBI 备份原厂 flash，刷机后恢复 PON/校准数据。"
+          echo "> 校准数据：${PROFILE} 对应 $(grep -m1 '^# 校准/身份数据' "$GITHUB_WORKSPACE/${CONFIG_FILE}" | cut -d: -f2-)"
         } >> release.txt
         echo "status=success" >> "$GITHUB_OUTPUT"
 
@@ -601,16 +649,23 @@ jobs:
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
+        make_latest: true
+        # 不同机型产物后缀不同，缺哪种都别让这一步失败
+        fail_on_unmatched_files: false
         files: |
           ${{ env.FIRMWARE }}/*.bin
           ${{ env.FIRMWARE }}/*.ubi
+          ${{ env.FIRMWARE }}/*.img
           ${{ env.FIRMWARE }}/*.img.gz
           ${{ env.FIRMWARE }}/*.itb
+          ${{ env.FIRMWARE }}/*.fit
+          ${{ env.FIRMWARE }}/*.trx
           ${{ env.FIRMWARE }}/*.tar.gz
           ${{ env.FIRMWARE }}/*.manifest
+          ${{ env.FIRMWARE }}/*.json
 
     # =========================================================
-    # 24. 清理旧记录
+    # 23. 清理旧记录
     # =========================================================
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@v2
