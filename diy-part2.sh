@@ -25,4 +25,17 @@ uci -q commit firewall
 exit 0
 EOF
 
+# LuCI 默认简体中文
+# 说明：装了 luci-i18n-*-zh-cn 只是"提供中文语言文件"，LuCI 默认 lang 是 auto/en，
+# 不会自动切中文。首次登录的语言选择页若点了 English，就会被写成 en 并一直生效。
+# 这里在 uci-defaults 阶段强制写入，让固件刷完就是中文。
+cat > files/etc/uci-defaults/99-luci-lang <<'EOF'
+# luci.main section 不存在则先创建（uci set 对缺失 section 会自动建 core 类型）
+[ -n "$(uci -q get luci.main)" ] || uci -q set luci.main=core
+uci -q set luci.main.lang='zh_cn'
+uci -q set luci.main.mediaurlbase='/luci-static/argon'
+uci -q commit luci
+exit 0
+EOF
+
 echo "[diy-part2] 完成"
