@@ -17,6 +17,7 @@ mkdir -p "$PKG_DIR"
 # ---------------------------------------------------------
 # 插件开关（默认只开 argon 主题，其余全关）
 # ---------------------------------------------------------
+ADD_ARGON=true         # sbwml 新版 argon 主题 + argon-config（会替换 feeds 旧版）
 ADD_PASSWALL=false     # luci-app-passwall（含依赖源）
 ADD_OPENCLASH=false    # luci-app-openclash ⚠ 依赖 Ruby/Rust，编译极慢
 ADD_MOSDNS=false       # luci-app-mosdns + v2ray-geodata
@@ -36,6 +37,12 @@ clone() {  # clone <url> <dir> [branch]
   [ $? -eq 0 ] && echo "✅ $dir" || echo "::warning::克隆失败 $url"
 }
 
+# --- argon 主题：先删 feeds 旧版，避免同名包冲突 ---
+if [ "$ADD_ARGON" = "true" ]; then
+  rm -rf feeds/luci/themes/luci-theme-argon
+  clone https://github.com/sbwml/luci-theme-argon "$PKG_DIR/luci-theme-argon" openwrt-24.10
+  clone https://github.com/sbwml/luci-app-argon-config "$PKG_DIR/luci-app-argon-config" master
+fi
 
 # --- passwall ---
 if [ "$ADD_PASSWALL" = "true" ]; then
