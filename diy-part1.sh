@@ -1,75 +1,101 @@
 #!/bin/bash
 # ================================================================
-# diy-part1.sh —— feeds 安装之后、加载 .config 之前执行
-# 运行目录: ponwrt 源码根目录
-# 职责: 追加第三方源 / 修正 feeds / 编译环境准备
+# diy-part1.sh —— 只做一件事：拉取可选插件到 package/custom
+# 运行目录: ponwrt 源码根目录（feeds 安装之后、加载 .config 之前）
+#
+# 用法：把需要的插件开关改成 true，再到 configs/<机型>.config 里
+#       把对应 "# CONFIG_PACKAGE_xxx is not set" 改成 "=y"
 # ================================================================
 
 echo "=========================================="
-echo "执行自定义脚本 (diy-part1.sh)"
+echo "拉取可选插件 (diy-part1.sh)"
 echo "=========================================="
 
-# --- git 身份，避免某些包 build 时报错 ---
-git config --global user.name  "PonWrt CI"
-git config --global user.email "ci@ponwrt.local"
-git config --global core.autocrlf input
+PKG_DIR="package/custom"
+mkdir -p "$PKG_DIR"
 
 # ---------------------------------------------------------
-# 1. feeds 来源控制
-#    ponwrt 自带 feeds.conf.default 中：
-#      packages / luci            -> ImmortalWrt  ✔ 保留
-#      pon_drivers / pon_userspace-> ponwrt PON   ✔ 保留
-#      routing / telephony / video-> OpenWrt 官方
-#    默认保留源自带配置。改成 true 即剔除 OpenWrt 官方三条 feed，
-#    编译范围严格限定在 ImmortalWrt + ponwrt 组件内。
+# 插件开关（默认只开 argon 主题，其余全关）
 # ---------------------------------------------------------
-STRIP_OPENWRT_FEEDS=false
+ADD_ARGON=true         # sbwml 新版 argon 主题 + argon-config（会替换 feeds 旧版）
+ADD_PASSWALL=false     # luci-app-passwall（含依赖源）
+ADD_OPENCLASH=false    # luci-app-openclash ⚠ 依赖 Ruby/Rust，编译极慢
+ADD_MOSDNS=false       # luci-app-mosdns + v2ray-geodata
+ADD_LUCKY=false        # luci-app-lucky（DDNS + socat）
+ADD_TAILSCALE=false    # luci-app-tailscale
+ADD_OPENLIST=false     # luci-app-openlist2（alist/openlist 挂载）
+ADD_SMARTDNS=false     # luci-app-smartdns
 
-if [ "$STRIP_OPENWRT_FEEDS" = "true" ]; then
-  sed -i '/^src-git[[:space:]]*\(routing\|telephony\|video\)[[:space:]]/d' feeds.conf.default
-  echo "✅ 已剔除 OpenWrt 官方 feed（routing / telephony / video）"
-fi
-
-# ---------------------------------------------------------
-# 2. 追加第三方 feeds（默认关闭，需要时把 false 改 true）
-# ---------------------------------------------------------
-ADD_EXTRA_FEEDS=false
-
-if [ "$ADD_EXTRA_FEEDS" = "true" ]; then
-  cat >> feeds.conf.default <<'EOF'
-src-git helloworld https://github.com/fw876/helloworld.git
-src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git
-EOF
-  ./scripts/feeds update -a
-  ./scripts/feeds install -a
-  echo "✅ 第三方 feeds 已追加"
-fi
-
-# ---------------------------------------------------------
-# 2. ponwrt 专用 feeds 检查（PON 驱动 / 用户态必须存在）
-# ---------------------------------------------------------
-for f in pon_drivers pon_userspace; do
-  if [ ! -d "feeds/$f" ]; then
-    echo "::warning::缺少 feed: $f —— LuCI 的 PON 配置项可能缺失"
+clone() {  # clone <url> <dir> [branch]
+  local url="$1" dir="$2" br="$3"
+  [ -d "$dir" ] && { echo "已存在，跳过: $dir"; return 0; }
+  if [ -n "$br" ]; then
+    git clone --depth 1 -b "$br" "$url" "$dir"
+  else
+    git clone --depth 1 "$url" "$dir"
   fi
-done
+  [ $? -eq 0 ] && echo "✅ $dir" || echo "::warning::克隆失败 $url"
+}
 
-# ---------------------------------------------------------
-# 3. 已知编译问题预处理
-# ---------------------------------------------------------
-# libxcrypt: -fcommon + 关闭 werror，避免 host 工具链编译中断
-XCRYPT_MK="feeds/packages/libs/libxcrypt/Makefile"
-if [ -f "$XCRYPT_MK" ]; then
-  sed -i 's/CONFIGURE_ARGS[ \t]*+=[ \t]*/&--disable-werror /' "$XCRYPT_MK"
-  sed -i 's/TARGET_CFLAGS[ \t]*+=[ \t]*/&-fcommon /' "$XCRYPT_MK"
-  echo "✅ libxcrypt 参数已硬化"
+# --- argon 主题：先删 feeds 旧版，避免同名包冲突 ---
+if [ "$ADD_ARGON" = "true" ]; then
+  rm -rf feeds/luci/themes/luci-theme-argon
+  clone https://github.com/sbwml/luci-theme-argon "$PKG_DIR/luci-theme-argon" openwrt-24.10
+  clone https://github.com/sbwml/luci-app-argon-config "$PKG_DIR/luci-app-argon-config" master
 fi
 
-# Rust: 强制本地编 LLVM，避免下载预编译 LLVM 失败
-RUST_MK=$(find feeds -type f -path "*/lang/rust/Makefile" 2>/dev/null | head -n1)
-if [ -f "$RUST_MK" ]; then
-  sed -i 's/download-ci-llvm=true/download-ci-llvm=false/g' "$RUST_MK"
-  echo "✅ Rust 已设为本地编译 LLVM"
+# --- passwall ---
+if [ "$ADD_PASSWALL" = "true" ]; then
+  clone https://github.com/xiaorouji/openwrt-passwall-packages "$PKG_DIR/openwrt-passwall-packages" main
+  clone https://github.com/xiaorouji/openwrt-passwall "$PKG_DIR/openwrt-passwall" main
+  rm -rf "$PKG_DIR/openwrt-passwall/luci-app-passwall2" 2>/dev/null
+fi
+
+# --- openclash ---
+if [ "$ADD_OPENCLASH" = "true" ]; then
+  echo "::warning::OpenClash 会触发 Ruby/Rust 编译，耗时极长"
+  clone https://github.com/vernesong/OpenClash "$PKG_DIR/OpenClash" master
+  mv "$PKG_DIR/OpenClash/luci-app-openclash" "$PKG_DIR/luci-app-openclash" 2>/dev/null
+  rm -rf "$PKG_DIR/OpenClash"
+fi
+
+# --- mosdns ---
+if [ "$ADD_MOSDNS" = "true" ]; then
+  clone https://github.com/sbwml/luci-app-mosdns "$PKG_DIR/luci-app-mosdns" v5
+  clone https://github.com/sbwml/v2ray-geodata "$PKG_DIR/v2ray-geodata" master
+fi
+
+# --- lucky ---
+if [ "$ADD_LUCKY" = "true" ]; then
+  clone https://github.com/sirpdboy/luci-app-lucky "$PKG_DIR/luci-app-lucky" main
+fi
+
+# --- tailscale ---
+if [ "$ADD_TAILSCALE" = "true" ]; then
+  clone https://github.com/asvow/luci-app-tailscale "$PKG_DIR/luci-app-tailscale" main
+fi
+
+# --- openlist2 ---
+if [ "$ADD_OPENLIST" = "true" ]; then
+  clone https://github.com/sbwml/luci-app-openlist2 "$PKG_DIR/luci-app-openlist2" main
+fi
+
+# --- smartdns ---
+if [ "$ADD_SMARTDNS" = "true" ]; then
+  clone https://github.com/pymumu/luci-app-smartdns "$PKG_DIR/luci-app-smartdns" master
+  clone https://github.com/pymumu/smartdns "$PKG_DIR/smartdns" master
+fi
+
+# ---------------------------------------------------------
+# 让新包进入索引
+# ---------------------------------------------------------
+if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
+  ./scripts/feeds update -i 2>/dev/null || true
+  ./scripts/feeds install -a >/dev/null 2>&1 || true
+  echo "✅ package/custom 内容："
+  ls -1 "$PKG_DIR"
+else
+  echo "未启用任何第三方插件"
 fi
 
 echo "🎉 diy-part1.sh 执行完毕"

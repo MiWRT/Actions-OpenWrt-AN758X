@@ -8,13 +8,30 @@
 ```
 .github/workflows/build-ponwrt.yml     主构建流程（机型可选 / 释放空间 / 工具链缓冲）
 .github/workflows/cache-keepalive.yml  每 5 天 touch 缓存，防止被回收
-diy-part1.sh    feeds 之后执行：第三方源、libxcrypt/Rust 预处理
-diy-part2.sh    配置之后执行：主机名/时区/IP、ccache、sysctl 优化
-diy-part3.sh    可选插件拉取：argon 主题、passwall、openclash、mosdns 等（默认全关）
-diy-partX.sh    收尾：切断 Ruby→Rust 依赖链
+diy-part1.sh    拉取可选插件到 package/custom（argon/passwall/openclash/mosdns/lucky/tailscale 等，默认全关）
+diy-part2.sh    把默认时区改成中国（Asia/Shanghai, CST-8）
 configs/        每机型一份精简 diffconfig（约 440 行，需 make defconfig 展开）
 files/          可选：自定义 rootfs 文件，会自动拷进源码
 ```
+
+## diy 脚本
+
+只有两个，职责单一：
+
+### diy-part1.sh —— 拉插件
+
+开关在脚本开头，默认只开 `ADD_ARGON=true`（sbwml 新版 argon 主题，会先 `rm -rf feeds/luci/themes/luci-theme-argon`
+再拉，避免同名包冲突）。其余 `ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
+`ADD_TAILSCALE` / `ADD_OPENLIST` / `ADD_SMARTDNS` 默认 false。
+
+启用两步：① 脚本里开关改 `true`；② `configs/<机型>.config` 第 19 段把对应
+`# CONFIG_PACKAGE_xxx is not set` 改成 `=y`。
+
+### diy-part2.sh —— 时区改中国
+
+- 改 `package/base-files/files/bin/config_generate`：`timezone='CST-8'`、`zonename='Asia/Shanghai'`
+- 写 `files/etc/uci-defaults/99-timezone-cn`，保留旧配置升级时也强制刷成中国时区
+- 往 `.config` 追加 `CONFIG_PACKAGE_zoneinfo-asia=y`（LuCI 时区显示与切换需要，基座默认关闭）
 
 ## configs 说明
 
@@ -70,9 +87,22 @@ target/包管理 → DEVICES → PON 内核驱动 → PON 用户态 → PON/IPTV
 | `profile` | 机型，默认 `fiberhome_hg5585f-cu`；`all` = 全机型编译 |
 | `scope` | `firmware` 出固件；`toolchain-only` 只编译并缓存工具链 |
 | `ignore_cache` | `true` 时忽略缓存强制重编工具链 |
+| `upload_release` | `true` 把固件发到 Release（默认开）；`false` 只传 Artifact |
 | `ssh` | `true` 进入 tmate 调试 |
 
-3. 产物：Artifacts（`OpenWrt_firmware_ponwrt-<soc>-<profile>_<时间>`）+ Release（`ponwrt-<soc>-<profile>-<branch>-<时间戳>`）。
+3. 产物：
+   - Artifact：`OpenWrt_firmware_ponwrt-<soc>-<profile>_<时间>`（无论 `upload_release` 开关都会传）
+   - Release：tag `ponwrt-<soc>-<profile>-<branch>-<时间戳>`，含固件 + sha256 校验 + 机型/校准数据说明
+
+## Release 行为
+
+- 只有 `scope=firmware` 且编译成功才发 Release；`toolchain-only` 不发。
+- 空固件目录会跳过，不会发空 Release。
+- `fail_on_unmatched_files: false`：机型产物后缀不同（`*.itb` / `*.ubi` / `*.bin` / `*.manifest` 等），缺哪种都不会让这一步失败。
+- 自动清理：每个机型的 Release 只保留最近 10 个（`delete_tag_pattern: ^<DEVICE_NAME>-`，不会误删 `toolchain-cache`）。
+- 关掉 Release 只留 Artifact：把 `upload_release` 选 `false`，或把 env 里 `UPLOAD_RELEASE` 默认值改成 `'false'`。
+
+> 首次运行建议先 `scope=toolchain-only`（不产固件、不发 Release）把工具链缓存建起来，再跑 `firmware`。
 
 ## 支持的机型
 
