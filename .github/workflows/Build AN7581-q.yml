@@ -1,4 +1,4 @@
-name: Build AN7581 PonWrt-q
+name: Build AN7581 PonWrt
 
 on:
   workflow_dispatch:
@@ -246,6 +246,31 @@ jobs:
 
         echo "===== PON 组件实际状态 ====="
         grep -E "^CONFIG_PACKAGE_(kmod-airoha-(xpon|pon-frontend|en7572|paged-bosa)|airoha-(pond|ponctl|pon-debug)|luci-app-(pon|iptv))=" .config || true
+
+        # 中文语言包：缺了界面就是英文，这里明确告警
+        echo "===== 中文语言包 ====="
+        if grep -qE "^CONFIG_PACKAGE_luci-i18n-.*-zh-cn=y" .config; then
+          grep -E "^CONFIG_PACKAGE_luci-i18n-.*-zh-cn=y" .config
+        else
+          echo "::error::没有任何 luci-i18n-*-zh-cn 被编入（feeds 里缺包或包名不对），界面会是英文"
+          echo "feeds 中实际的 luci-i18n 包："
+          find feeds package -maxdepth 4 -type d -name "luci-i18n*" 2>/dev/null | head -20 || true
+          fail=1
+        fi
+
+        # 时区数据：缺了 zonename 不生效
+        if ! grep -qE "^CONFIG_PACKAGE_zoneinfo" .config; then
+          echo "::warning::未开启 zoneinfo，Asia/Shanghai 无法解析，时区可能仍是 UTC"
+        fi
+
+        # 关键模块被重置为 =m 时告警（=m 只产 ipk，不进镜像）
+        echo "===== 检查被重置为 =m 的关键模块 ====="
+        for m in kmod-mt7915e kmod-mt7916-firmware kmod-phy-airoha-en8811h \
+                 kmod-fs-ext4 kmod-fs-exfat kmod-usb3 kmod-usb-storage; do
+          if grep -q "^CONFIG_PACKAGE_${m}=m" .config; then
+            echo "::warning::${m}=m，只产 ipk 不进镜像，刷完机不会自带"
+          fi
+        done
 
         [ "$fail" = "0" ] || exit 1
 
