@@ -48,7 +48,7 @@ on:
           - an7581
           - an7583
       profile:
-        description: '机型 profile (all=全机型编译)'
+        description: '机型 profile'
         required: true
         default: 'fiberhome_hg5585f-cu'
         type: choice
@@ -64,7 +64,6 @@ on:
           - znxt_zn515xg-d
           - nokia_xg-040g-mf
           - nokia_xg-040g-mf-ubi
-          - all
       scope:
         description: '构建范围 (toolchain-only 仅预热工具链缓存)'
         required: true
