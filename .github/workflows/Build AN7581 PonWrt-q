@@ -185,7 +185,7 @@ jobs:
     - name: 载入 .config 与 diy-part2.sh
       run: |
         cd openwrt
-        CFG="$GITHUB_WORKSPACE/configs/an7581-${{ inputs.device }}.config"
+        CFG="$GITHUB_WORKSPACE/configs-q/an7581-${{ inputs.device }}.config"
         if [ -f "$CFG" ]; then
           cp "$CFG" .config
           echo "已载入：$CFG"
