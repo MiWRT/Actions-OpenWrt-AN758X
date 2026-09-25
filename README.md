@@ -29,9 +29,6 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 另外 CI 仓库自带一个本地包（`packages/luci-app-pon-status`，不走 clone，由 diy-part1.sh 拷进
 `package/custom`）：把 **PON 光模块的温度、收光功率、发光功率** 以表格形式显示在概览页。
 
-> **已移除 `luci-app-temp-status`**：温度统一由 autocore 的 `/sbin/tempinfo`
-> 提供（见下节），功能重叠，无需再装该插件。
-
 其余默认关闭：`ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
 `ADD_TAILSCALE` / `ADD_OPENLIST` / `ADD_SMARTDNS`。
 
