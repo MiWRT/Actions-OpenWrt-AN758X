@@ -11,7 +11,11 @@ name: Build PonWrt (Airoha AN758x PON)
 env:
   # 编译根目录：必须静态定义（供 actions/cache 的 path 使用）
   BUILD_ROOT: /workdir
-  REPO_URL: https://github.com/pbs05/ponwrt
+  # 源码仓库二选一：
+  #   fork     = qwe3017/ponwrt  —— 上游 fork，已合入 H3C HM2004-DU（默认）
+  #   upstream = pbs05/ponwrt    —— 上游原仓，HM2004-DU 需靠 diy-part1.sh 注入
+  SOURCE: ${{ github.event.inputs.source || 'fork' }}
+  REPO_URL: ${{ github.event.inputs.source == 'upstream' && 'https://github.com/pbs05/ponwrt' || 'https://github.com/qwe3017/ponwrt' }}
   FEEDS_CONF: ''                       # 留空=使用源码自带 feeds.conf.default(含 pon_drivers/pon_userspace)
   DIY_P1_SH: diy-part1.sh      # 拉取可选插件
   DIY_P2_SH: diy-part2.sh      # 时区改为中国
@@ -39,6 +43,14 @@ on:
   repository_dispatch:
   workflow_dispatch:
     inputs:
+      source:
+        description: '编译源码仓库（fork 已内置 H3C HM2004-DU）'
+        required: true
+        default: 'fork'
+        type: choice
+        options:
+          - fork
+          - upstream
       branch:
         description: 'ponwrt 源码分支'
         required: true
@@ -66,6 +78,7 @@ on:
           - unionman_ung00a
           - znxt_zn504xg-d
           - znxt_zn515xg-d
+          - h3c_hm2004-du
           - nokia_xg-040g-mf
           - nokia_xg-040g-mf-ubi
           - all
@@ -151,6 +164,7 @@ jobs:
         echo "========================================"
         echo "SoC      : $SOC"
         echo "Profile  : $PROFILE"
+        echo "Source   : ${SOURCE} (${REPO_URL})"
         echo "Branch   : ${REPO_BRANCH}"
         echo "Scope    : ${BUILD_SCOPE}"
         echo "========================================"
@@ -221,9 +235,9 @@ jobs:
         # 按分支 + 周号：同一周内复用同一条目。
         # 原先用 github.run_number → 每次运行都 save 一份新副本，
         # 10GB 配额会被迅速刷满并淘汰掉有用的旧缓存。
-        key: ponwrt-dl-${{ github.event.inputs.branch || 'master' }}-${{ steps.resolve.outputs.week }}
+        key: ponwrt-dl-${{ env.SOURCE }}-${{ github.event.inputs.branch || 'master' }}-${{ steps.resolve.outputs.week }}
         restore-keys: |
-          ponwrt-dl-${{ github.event.inputs.branch || 'master' }}-
+          ponwrt-dl-${{ env.SOURCE }}-${{ github.event.inputs.branch || 'master' }}-
         # 关键：即使后面编译失败也要保住已下载的源码包
         save-always: true
 
