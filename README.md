@@ -20,8 +20,24 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 
 ### diy-part1.sh —— 拉插件
 
-开关在脚本开头，默认**全关**：`ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
+**默认开启（硬件状态监控两件套，config 里已 `=y`）**：
+
+| 开关 | 包 | 作用 |
+|------|-----|------|
+| `ADD_AIROHA_NPU` | `luci-app-airoha-npu` | Airoha SoC 状态页：NPU 卸载 / CPU 频率与超频 / Frame Engine / PPE 流表 |
+| `ADD_TEMP_STATUS` | `luci-app-temp-status` | CPU + WiFi 芯片温度显示在「状态 → 概览」页 |
+
+其余默认关闭：`ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
 `ADD_TAILSCALE` / `ADD_OPENLIST` / `ADD_SMARTDNS`。
+
+⚠️ 两点：
+- 拉取目录名必须等于包名（`luci.mk: PKG_NAME ?= $(notdir ${CURDIR})`），
+  改目录名会导致 config 里的符号对不上。
+- 默认开启的两个若拉取失败，脚本会 `::error::` 退出——否则 `defconfig` 会静默剔除，
+  编出缺状态页的固件还不易察觉。要关就把开关和 config 里的 `=y` 一起改。
+
+两个插件的中文情况：`luci-app-temp-status` 带 `po/zh_Hans`，`LUCI_LANG_zh_Hans=y` 会自动选中
+其 `zh-cn` 包；`luci-app-airoha-npu` 的 po 只有 es，**界面为英文**（上游未提供中文模板）。
 
 
 启用两步：① 脚本里开关改 `true`；② `configs/<机型>.config` 第 19 段把对应
@@ -33,6 +49,21 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 - 写 `files/etc/uci-defaults/99-timezone-cn`，保留旧配置升级时也强制刷成中国时区
 - 往 `.config` 追加 `CONFIG_PACKAGE_zoneinfo-asia=y`（LuCI 时区显示与切换需要，基座默认关闭）
 
+## configs 说明
+
+每个机型一份 `configs/<profile>.config`，统一为**精简 diffconfig**（约 450 行），只写与 ponwrt 官方
+`configs/an7581.config` / `an7583.config` 基座的差异。
+
+⚠️ **流程采用「基座打底 + 差异追加」**：先 `cp` 源码自带的 `configs/<soc>.config` 作为 `.config`，
+再把机型精简配置 `cat >>` 追加（后写覆盖先写），最后 `make defconfig` 展开。
+
+这么做是必须的——不少符号是 tristate 且**无 default（默认 n）**，例如：
+- `CONFIG_LUCI_LANG_zh_Hans`（LuCI 中文总开关，默认 n → 不写就丢中文包）
+- `CONFIG_PACKAGE_TAR_*`、`CONFIG_PACKAGE_MAC80211_*`（tar / mac80211 特性开关）
+- `CONFIG_PACKAGE_kmod-mppe`、`CONFIG_PACKAGE_kmod-ovpn-backports`
+
+若直接把精简配置当 `.config` 展开，`defconfig` 会把这些重置成默认 n。先铺基座可保留全部非默认值。
+
 统一规则：
 
 - **NPU 每机型都开**：AN7581 → `airoha-en7581-npu-firmware=y`，AN7583 → `airoha-an7583-npu-firmware=y`，
@@ -42,6 +73,16 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
   不引入 iptables，也不引入 OpenWrt 官方 feed 的包；PON 相关全部来自 `pon_drivers` / `pon_userspace`。
 - **按 DTS 硬件逐机型裁剪**：光器件（FiberHome BOSA / EN7572 二选一）、PHY（GPY211 / EN8811H / RTL8261N）、
   WiFi（仅 hg5585f-ct/cu 与 zn515 有 MT7916D）、USB（无口机型整段关闭）。
+- 可选插件（passwall / openclash / mosdns / lucky / tailscale / 主题）全部以注释形式放在第 19 段，
+  由 `diy-part3.sh` 拉取，默认关闭。
+
+段落顺序：
+```
+target/包管理 → DEVICES → PON 内核驱动 → PON 用户态 → PON/IPTV LuCI
+→ nftables 网络转发 → 隧道拨号 → LuCI → 基础服务 → 系统工具
+→ 固件工具 → 内核模块 → 基础库 → 内核选项
+→ 13 光器件 → 14 NPU 卸载 → 15 WiFi → 16 USB → 17 PHY → 18 TF-A → 19 可选插件 → 20 其他
+```
 
 | 机型 | SoC | 光器件 | 2.5G PHY | WiFi | USB | 校准数据 |
 |------|-----|--------|----------|------|-----|----------|
@@ -68,7 +109,7 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 |------|------|
 | `branch` | ponwrt 源码分支，默认 `master` |
 | `soc` | `an7581` / `an7583`，选 `all` 机型时生效，其他情况按机型自动校正 |
-| `profile` | 机型，默认 `fiberhome_hg5585f-cu`；`all` = 全机型编译 |
+| `profile` | 机型，默认 `fiberhome_hg5585f-cu`；`all` = 该 SoC 下全机型编译（见下） |
 | `scope` | `firmware` 出固件；`toolchain-only` 只编译并缓存工具链 |
 | `ignore_cache` | `true` 时忽略缓存强制重编工具链 |
 | `upload_release` | `true` 把固件发到 Release（默认开）；`false` 只传 Artifact |
@@ -77,6 +118,27 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 3. 产物：
    - Artifact：`OpenWrt_firmware_ponwrt-<soc>-<profile>_<时间>`（无论 `upload_release` 开关都会传）
    - Release：tag `ponwrt-<soc>-<profile>-<branch>-<时间戳>`，含固件 + sha256 校验 + 机型/校准数据说明
+
+## profile=all 的行为
+
+选 `all` 时**不裁剪机型**，保留源码基座里已选中的全部机型一次性编译：
+
+| SoC | 机型数 | profile |
+|-----|-------|---------|
+| an7581 | 9 | hg5382a、hg5585f-ct、hg5585f-cu、gemtek_xg2010g、unionman_ung00a、nokia_xg-040g-md-ubi、nokia_xg-040g-tf-ubi、znxt_zn504xg-d、znxt_zn515xg-d |
+| an7583 | 2 | nokia_xg-040g-mf、nokia_xg-040g-mf-ubi |
+
+用的是 `configs/an7581.config` / `configs/an7583.config`（SoC 通用配置）。
+
+机制上是 `CONFIG_TARGET_MULTI_PROFILE=y` + `CONFIG_TARGET_PER_DEVICE_ROOTFS=y`：
+**工具链和内核只编一次，但每个机型各出一份 rootfs + 镜像**。所以不是 9 倍耗时，
+约单机型的 3~5 倍。
+
+⚠️ 两点注意：
+- 全机型无法按硬件裁剪，光器件（BOSA + EN7572）、三种 PHY、WiFi、USB 全部开启。
+  各机型启动时由 DTS 匹配自己需要的驱动，多余模块不会被加载。
+- 免费 runner 上限 6h，全机型大概率超时。要用就先跑 `scope=toolchain-only`
+  建好缓存，并把 workflow 的 `timeout-minutes` 调大。
 
 ## Release 行为
 
