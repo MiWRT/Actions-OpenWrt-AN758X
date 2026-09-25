@@ -143,6 +143,25 @@ if [ "$ADD_AIROHA_NPU" = "true" ] && [ ! -d "$PKG_DIR/luci-app-airoha-npu" ]; th
 fi
 
 # ---------------------------------------------------------
+# 清理重复嵌套目录
+# rchen14b/luci-app-airoha-npu 这个仓库有问题：包在根目录放了一份，
+# 又在同名子目录 luci-app-airoha-npu/ 里放了完整一份（含 Makefile）。
+# feeds 扫描会把两层都当成独立包，内层 dump 失败（报
+# "feeds/custom/luci-app-airoha-npu/luci-app-airoha-npu"）会中断整个
+# custom feed 的索引，导致 package/feeds/custom 压根不生成，
+# 所有包符号都不存在。
+# ---------------------------------------------------------
+echo "--- 检查重复嵌套目录 ---"
+for d in "$PKG_DIR"/*; do
+  [ -d "$d" ] || continue
+  n=$(basename "$d")
+  if [ -d "$d/$n" ] && [ -f "$d/$n/Makefile" ]; then
+    rm -rf "$d/$n"
+    echo "✅ 已移除重复嵌套目录: $n/$n"
+  fi
+done
+
+# ---------------------------------------------------------
 # 让新包进入索引
 # ---------------------------------------------------------
 if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
@@ -181,6 +200,33 @@ if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
   echo "------------------------------------------"
   echo "luci.mk: $([ -f feeds/luci/luci.mk ] && echo '✓' || echo '✗ 缺失（luci app 无法解析）')"
   echo "=========================================="
+
+  # =========================================================
+  # 索引失败兜底 + 真实错误输出
+  # feeds 脚本只说"详情见 dump.txt"，那个文件在日志里看不到，
+  # 这里把它打印出来，并尝试回退方案：直接塞进已安装的 luci feed
+  # =========================================================
+  if [ ! -d package/feeds/custom ] || [ -z "$(ls -A package/feeds/custom 2>/dev/null)" ]; then
+    echo "::warning::custom feed 索引未生成，打印真实错误："
+    for f in logs/feeds/custom/*/*/dump.txt logs/feeds/custom/*/dump.txt; do
+      [ -f "$f" ] && { echo "===== $f ====="; tail -25 "$f"; }
+    done 2>/dev/null
+
+    echo ""
+    echo "--- 尝试回退：拷入 feeds/luci/applications ---"
+    if [ -d feeds/luci/applications ]; then
+      for d in "$PKG_DIR"/*; do
+        [ -d "$d" ] || continue
+        n=$(basename "$d")
+        rm -rf "feeds/luci/applications/$n"
+        cp -r "$d" "feeds/luci/applications/$n"
+        echo "  已拷贝: $n"
+      done
+      ./scripts/feeds install -a >/dev/null 2>&1 || true
+      echo "  回退后 package/feeds/luci/ :"
+      ls -1 package/feeds/luci/ 2>/dev/null | grep -E "airoha-npu|pon-status" || echo "    ⚠ 仍未出现"
+    fi
+  fi
 else
   echo "未启用任何第三方插件"
 fi
