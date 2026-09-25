@@ -115,9 +115,16 @@ jobs:
     # 0. 解析机型 -> 自动校正 SoC，导出 device name
     # =========================================================
     - name: Resolve device profile
+      id: resolve
       run: |
         PROFILE="${PROFILE}"
         SOC="${SOC}"
+
+        # 缓存版本号：按「年+周」滚动（如 202639）。
+        # 用途：dl / ccache 的 key 用它替代 run_id、run_number。
+        # 若用 run_* ，每次运行都会 save 一份新副本，10GB 配额很快被
+        # 刷满并淘汰掉真正有用的旧缓存；改用周号后同一周内复用同一条目。
+        echo "week=$(date +%Y%W)" >> "$GITHUB_OUTPUT"
 
         if [ "$PROFILE" != "all" ]; then
           case "$PROFILE" in
@@ -207,8 +214,10 @@ jobs:
       continue-on-error: true
       with:
         path: /workdir/openwrt/dl
-        # 按分支 + 周数：同一周内复用，避免每次 run_id 都新建缓存条目
-        key: ponwrt-dl-${{ github.event.inputs.branch || 'master' }}-${{ github.run_number }}
+        # 按分支 + 周号：同一周内复用同一条目。
+        # 原先用 github.run_number → 每次运行都 save 一份新副本，
+        # 10GB 配额会被迅速刷满并淘汰掉有用的旧缓存。
+        key: ponwrt-dl-${{ github.event.inputs.branch || 'master' }}-${{ steps.resolve.outputs.week }}
         restore-keys: |
           ponwrt-dl-${{ github.event.inputs.branch || 'master' }}-
         # 关键：即使后面编译失败也要保住已下载的源码包
@@ -557,7 +566,7 @@ jobs:
       continue-on-error: true
       with:
         path: ${{ env.BUILD_ROOT }}/openwrt/.ccache
-        key: ponwrt-ccache-${{ env.SOC }}-${{ github.run_id }}
+        key: ponwrt-ccache-${{ env.SOC }}-${{ steps.resolve.outputs.week }}
         restore-keys: |
           ponwrt-ccache-${{ env.SOC }}-
 
@@ -628,7 +637,10 @@ jobs:
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
         name: OpenWrt_bin_${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
+        # 必须用绝对路径：openwrt/bin 是 $GITHUB_WORKSPACE 下的符号链接
+        # （Clone source code 步骤 ln -sf 建的），upload-artifact 遍历
+        # 符号链接目录不可靠，可能传一个空包。
+        path: ${{ env.BUILD_ROOT }}/openwrt/bin
 
     # =========================================================
     # 21. 整理并上传固件
@@ -718,10 +730,13 @@ jobs:
     # 23. 清理旧记录
     # =========================================================
     - name: Delete workflow runs
+      # 仅清理「已上传成功」的运行；失败的运行保留日志便于排错。
+      # 原先无条件 retain_days:1，会把失败日志也删掉。
+      if: steps.compile.outputs.status == 'success'
       uses: Mattraks/delete-workflow-runs@v2
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-        retain_days: 1
+        retain_days: 7
         keep_minimum_runs: 10
 
     - name: Remove old releases
