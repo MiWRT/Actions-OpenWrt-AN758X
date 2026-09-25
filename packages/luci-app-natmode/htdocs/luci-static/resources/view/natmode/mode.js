@@ -16,7 +16,8 @@
 'require ui';
 
 function parseStatus(text) {
-	var st = { mode: '?', fullcone: '0', random_rules: '0', module: '?' };
+	var st = { mode: '?', effective: '?', fullcone: '0',
+	           random_rules: '0', offload: 'off', module: '?' };
 	(text || '').split('\n').forEach(function(line) {
 		var kv = line.split('=');
 		if (kv.length >= 2)
@@ -34,16 +35,41 @@ function modeLabel(m) {
 	}
 }
 
+function offloadLabel(v) {
+	switch (v) {
+		case 'hw':  return _('硬件卸载');
+		case 'sw':  return _('软件卸载');
+		default:    return _('关闭');
+	}
+}
+
 function renderStatus(st) {
 	var rows = [
-		_('当前模式'),   modeLabel(st.mode),
-		_('FullCone 开关'), (st.fullcone === '1' ? _('已启用') : _('已关闭')),
-		_('随机端口规则'), (st.random_rules !== '0' ? _('已注入 ') + st.random_rules + _(' 条') : _('无')),
+		_('本页设置'),        modeLabel(st.mode),
+		_('实际生效'),        modeLabel(st.effective),
+		_('FullCone 开关'),   (st.fullcone === '1' ? _('已启用') : _('已关闭')),
+		_('随机端口规则'),    (st.random_rules !== '0'
+			? _('已注入 ') + st.random_rules + _(' 条') : _('无')),
+		_('路由/NAT 卸载'),   offloadLabel(st.offload),
 		_('fullcone 内核模块'), (st.module === 'loaded' ? _('已加载') : _('未加载'))
 	];
 
-	if (st.module !== 'loaded' && st.mode === 'fullcone')
-		rows.push(_('提示'), _('未检测到 nft_fullcone 模块，全锥形可能不生效'));
+	var warn = [];
+
+	// 与防火墙页面的 FullCone 开关不一致：
+	// 网络 → 防火墙 → 常规设置 里的「启用 FullCone NAT」写的就是
+	// firewall.@defaults[0].fullcone，与本插件同一个 UCI 键。
+	// 在那边直接改不会同步本页的 natmode.main.mode。
+	if (st.mode !== st.effective)
+		warn.push(E('p', {}, _('本页设置与实际生效不一致：可能已在「网络 → 防火墙 → 常规设置」'
+			+ '直接改动过 FullCone 开关。请在本页重新选择并保存以同步。')));
+
+	if (st.module !== 'loaded' && st.effective === 'fullcone')
+		warn.push(E('p', {}, _('未检测到 nft_fullcone 模块，全锥形可能不生效。')));
+
+	if (st.offload !== 'off' && st.effective !== 'restricted')
+		warn.push(E('p', {}, _('已开启路由/NAT 卸载，卸载流量会绕过 conntrack，'
+			+ '可能使全锥形或随机端口行为不稳定。建议测 NAT 类型时临时关闭卸载。')));
 
 	var table = E('table', { 'class': 'table' });
 	for (var i = 0; i < rows.length; i += 2) {
@@ -53,10 +79,12 @@ function renderStatus(st) {
 		]));
 	}
 
-	return E('div', { 'class': 'cbi-section' }, [
-		E('h3', _('当前状态')),
-		table
-	]);
+	var children = [ E('h3', _('当前状态')), table ];
+	warn.forEach(function(w) {
+		children.push(E('div', { 'class': 'alert-message warning' }, [ w ]));
+	});
+
+	return E('div', { 'class': 'cbi-section' }, children);
 }
 
 return view.extend({
