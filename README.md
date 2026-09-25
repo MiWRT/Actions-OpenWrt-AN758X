@@ -27,6 +27,9 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 | `ADD_AIROHA_NPU` | `luci-app-airoha-npu` | Airoha SoC 状态页：NPU 卸载 / CPU 频率与超频 / Frame Engine / PPE 流表 |
 | `ADD_TEMP_STATUS` | `luci-app-temp-status` | CPU + WiFi 芯片温度显示在「状态 → 概览」页 |
 
+另外 CI 仓库自带一个本地包（`packages/luci-app-pon-status`，不走 clone，由 diy-part1.sh 拷进
+`package/custom`）：把 **PON 光模块的温度、收光功率、发光功率** 显示在概览页。
+
 其余默认关闭：`ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
 `ADD_TAILSCALE` / `ADD_OPENLIST` / `ADD_SMARTDNS`。
 
@@ -139,6 +142,48 @@ target/包管理 → DEVICES → PON 内核驱动 → PON 用户态 → PON/IPTV
   各机型启动时由 DTS 匹配自己需要的驱动，多余模块不会被加载。
 - 免费 runner 上限 6h，全机型大概率超时。要用就先跑 `scope=toolchain-only`
   建好缓存，并把 workflow 的 `timeout-minutes` 调大。
+
+## PON 光模块状态上概览页
+
+`packages/luci-app-pon-status`（本地包，非第三方 clone）在「状态 → 概览」新增一个
+「PON 光模块」卡片，显示：
+
+| 字段 | 来源字段 | 单位 |
+|------|---------|------|
+| 收光功率 | `rx_power_dbm` | dBm |
+| 发光功率 | `tx_power_dbm` | dBm |
+| 光模块温度 | `temperature_celsius` | °C |
+| 偏置电流 | `tx_bias_ma` | mA |
+| 供电电压 | `voltage_volts` | V |
+
+### 数据链路
+
+```
+概览页 include(70_pon.js)
+  → rpcd file.exec（ACL: luci-app-pon-status）
+  → ponctl --device <dev> status --json
+  → airoha-ponctl 的 convert_optics() 已把 SFF-8472 原始值换算成显示单位
+```
+
+换算规则（`airoha-ponctl/src/src/status.rs`）：
+
+| 原始字段 | 换算 | 输出字段 |
+|---------|------|---------|
+| `temperature_8472` | ÷ 256 | `temperature_celsius`（°C）|
+| `voltage_8472` | × 1e-4 | `voltage_volts`（V）|
+| `tx_bias_8472` | × 0.002 | `tx_bias_ma`（mA）|
+| `tx_power_8472` | 10·log10(v) − 40 | `tx_power_dbm`（dBm）|
+| `rx_power_8472` | 10·log10(v) − 40 | `rx_power_dbm`（dBm）|
+
+### 实现要点
+
+- 概览页扩展机制：`luci-mod-status` 的 `index.js` 会 `fs.list('/www/luci-static/resources/view/status/include')`，
+  按文件名排序后 `L.require()` 每个 `.js`。模块用 `baseclass.extend({ title, load, render })` 导出。
+  文件名 `70_pon.js` 决定它排在 `60_wifi.js` 之后。
+- 设备名从 UCI `pon` 配置的 `xpon` 段 `device` 项读取，和 `luci-app-pon` 的 status.js 一致。
+- 无 PON 设备或读取失败时 `render` 返回 `null`，卡片自动隐藏（`load` 里 `Promise.reject()`）。
+- 自带 rpcd ACL（`luci-app-pon-status` 组），授权 `ponctl --device * status --json` 的 exec。
+  与 `luci-app-pon` 用不同组名，避免 acl.d 同名覆盖。
 
 ## Release 行为
 

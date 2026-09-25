@@ -29,6 +29,21 @@ ADD_TAILSCALE=false    # luci-app-tailscale
 ADD_OPENLIST=false     # luci-app-openlist2（alist/openlist 挂载）
 ADD_SMARTDNS=false     # luci-app-smartdns
 
+# ---------------------------------------------------------
+# 本地包：CI 仓库自带的包（不在任何 feed 里），拷进 package/custom
+# 目前有 luci-app-pon-status：把 PON 温度/收发光功率显示在概览页
+# ---------------------------------------------------------
+LOCAL_PKG_DIR="${GITHUB_WORKSPACE}/packages"
+if [ -d "$LOCAL_PKG_DIR" ]; then
+  for p in "$LOCAL_PKG_DIR"/*; do
+    [ -d "$p" ] || continue
+    # 目录名必须等于包名（luci.mk: PKG_NAME ?= $(notdir ${CURDIR})）
+    rm -rf "$PKG_DIR/$(basename "$p")"
+    cp -r "$p" "$PKG_DIR/"
+    echo "✅ 本地包: $(basename "$p")"
+  done
+fi
+
 clone() {  # clone <url> <dir> [branch]
   local url="$1" dir="$2" br="$3"
   [ -d "$dir" ] && { echo "已存在，跳过: $dir"; return 0; }
