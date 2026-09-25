@@ -49,19 +49,35 @@ fi
 clone() {  # clone <url> <dir> [branch]
   local url="$1" dir="$2" br="$3"
   [ -d "$dir" ] && { echo "已存在，跳过: $dir"; return 0; }
+  echo "--- git clone $url -> $dir ---"
   if [ -n "$br" ]; then
-    git clone --depth 1 -b "$br" "$url" "$dir"
+    git clone --depth 1 -b "$br" "$url" "$dir" 2>&1 | tail -3
   else
-    git clone --depth 1 "$url" "$dir"
+    git clone --depth 1 "$url" "$dir" 2>&1 | tail -3
   fi
-  [ $? -eq 0 ] && echo "✅ $dir" || echo "::warning::克隆失败 $url"
+  if [ -d "$dir" ]; then
+    echo "✅ 克隆成功: $dir"
+    return 0
+  fi
+  echo "::error::克隆失败: $url"
+  return 1
 }
 
 # --- Airoha SoC 状态页（NPU 卸载 / CPU 频率 / Frame Engine / PPE 流表）---
 # 包名由目录名决定（luci.mk: PKG_NAME ?= $(notdir ${CURDIR})），
 # 目录必须是 luci-app-airoha-npu，否则 config 里的符号对不上。
 if [ "$ADD_AIROHA_NPU" = "true" ]; then
-  clone https://github.com/rchen14b/luci-app-airoha-npu "$PKG_DIR/luci-app-airoha-npu" main
+  if ! clone https://github.com/rchen14b/luci-app-airoha-npu "$PKG_DIR/luci-app-airoha-npu" main; then
+    echo "::error::luci-app-airoha-npu 拉取失败，后续 defconfig 会静默剔除该包"
+    exit 1
+  fi
+
+  # 包名校验：Makefile 必须存在，否则 buildroot 扫不到这个包
+  if [ ! -f "$PKG_DIR/luci-app-airoha-npu/Makefile" ]; then
+    echo "::error::$PKG_DIR/luci-app-airoha-npu/Makefile 不存在，包无法被索引"
+    exit 1
+  fi
+  echo "   包名: $(grep -m1 '^PKG_NAME' "$PKG_DIR/luci-app-airoha-npu/Makefile" 2>/dev/null || echo '(由目录名推断)' )"
 
   # 注入简体中文翻译（上游 po/ 只有 es 和 templates，没有 zh_Hans）
   # 文件名必须是 airoha-npu.po（= LUCI_BASENAME），不能用 luci-app-airoha-npu.po：
@@ -130,10 +146,21 @@ fi
 # 让新包进入索引
 # ---------------------------------------------------------
 if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
-  ./scripts/feeds update -i 2>/dev/null || true
+  # 强制重建包索引：新 clone 的包必须让 metadata.pl 重新扫描，
+  # 否则 defconfig 可能沿用旧的 tmp/.packageinfo，把 =y 当无效符号剔除
+  rm -f tmp/.packageinfo tmp/.targetinfo 2>/dev/null
+
   ./scripts/feeds install -a >/dev/null 2>&1 || true
-  echo "✅ package/custom 内容："
+
+  echo "=========================================="
+  echo "package/custom 内容："
   ls -1 "$PKG_DIR"
+  echo "------------------------------------------"
+  for d in "$PKG_DIR"/*; do
+    [ -d "$d" ] || continue
+    echo "  $(basename "$d") : $([ -f "$d/Makefile" ] && echo 'Makefile ✓' || echo 'Makefile ✗ 缺失')"
+  done
+  echo "=========================================="
 else
   echo "未启用任何第三方插件"
 fi
