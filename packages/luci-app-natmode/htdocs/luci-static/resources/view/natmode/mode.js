@@ -95,7 +95,19 @@ return view.extend({
 	render: function(statusText) {
 		var st = parseStatus(statusText);
 
-		var m = new form.JSONMap('natmode', _('NAT 类型'),
+		// =========================================================
+		// 必须用 form.Map，不能用 form.JSONMap！
+		//
+		// form.js 中 CBIJSONMap 的实现：
+		//   __init__(data, ...) { this.config='json';
+		//                        this.data = new CBIJSONConfig(data); }
+		// 它把第一个参数当作「JSON 数据对象」而非文件名，
+		// 且 parsechain=['json'] —— 用于 JSON 配置文件（如 luci 的
+		// 某些 js 配置），不是 UCI。
+		// /etc/config/natmode 是标准 UCI 文件，必须用 form.Map，
+		// 否则解析失败、保存也写不回去。
+		// =========================================================
+		var m = new form.Map('natmode', _('NAT 类型'),
 			_('选择路由器对内网出向连接的 NAT 行为。数字越小越宽松，P2P / 游戏 / PT 体验越好。'));
 
 		var s = m.section(form.NamedSection, 'main', 'natmode');

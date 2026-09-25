@@ -33,8 +33,10 @@ ADD_SMARTDNS=false     # luci-app-smartdns
 
 # ---------------------------------------------------------
 # 本地包：CI 仓库自带的包（不在任何 feed 里），拷进 package/custom
-# 当前为空 —— PON 光模块已并入「系统」表格（files/www/.../10_system.js），
-# 不再需要独立的 luci-app-pon-status 卡片包。
+# 当前两个：
+#   luci-app-pon-status —— PON 光模块卡片，概览页「系统」下一格
+#                          （文件名 15_pon.js 决定位置）
+#   luci-app-natmode    —— NAT 类型三选一，菜单「网络 → NAT 类型」
 # ---------------------------------------------------------
 LOCAL_PKG_DIR="${GITHUB_WORKSPACE}/packages"
 if [ -d "$LOCAL_PKG_DIR" ]; then
@@ -249,7 +251,7 @@ if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
       done
       ./scripts/feeds install -a >/dev/null 2>&1 || true
       echo "  回退后 package/feeds/luci/ :"
-      ls -1 package/feeds/luci/ 2>/dev/null | grep -E "airoha-npu|pon-status" || echo "    ⚠ 仍未出现"
+      ls -1 package/feeds/luci/ 2>/dev/null | grep -E "airoha-npu|pon-status|natmode" || echo "    ⚠ 仍未出现"
     fi
   fi
 else
