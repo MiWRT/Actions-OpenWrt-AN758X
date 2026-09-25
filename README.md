@@ -42,140 +42,42 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
   会静默剔除，编出缺状态页的固件还不易察觉。要关就把开关和 config 里的 `=y` 一起改。
 
 中文情况：`luci-app-pon-status` 的文案写在 JS 里，已直接用中文。
-`luci-app-airoha-npu` 上游 `po/` 只有 `es` 和 `templates`，**没有中文** ——
-本仓库自带一份完整中文翻译（77 条），见下节。
+`luci-app-airoha-npu` 用 luanmuc 版，**自带完整中文翻译**，见下节。
 
-### luci-app-airoha-npu 中文包
+### luci-app-airoha-npu 的源与中文
 
-CI 仓库维护翻译文件：
+**源仓库：`luanmuc/luci-app-airoha-npu`**（`rchen14b` 的 fork 改进版）：
 
-```
-po/luci-app-airoha-npu/zh_Hans/airoha-npu.po    # 77 条，已全部翻译
-```
+| | rchen14b（原版）| luanmuc（本仓库选用）|
+|---|---|---|
+| 中文翻译 | ❌ po/ 只有 es + templates | ✅ 自带 `po/zh_Hans`，48 条全翻 |
+| 仓库结构 | ⚠ 根目录 + 同名子目录各一份，feed 索引会中断 | ✅ 单层，正常 |
+| luci.mk 路径 | 需 feeds 在固定位置 | ✅ 已修 |
 
-`diy-part1.sh` 在 clone 完上游后把它拷进
-`package/custom/luci-app-airoha-npu/po/zh_Hans/`，再配合 config 里的
+config 里两个符号都开：
 
 ```
 CONFIG_PACKAGE_luci-app-airoha-npu=y
 CONFIG_PACKAGE_luci-i18n-airoha-npu-zh-cn=y
 ```
 
-即可编出中文界面。
+#### po 文件名必须改名（diy-part1.sh 已自动处理）
 
-⚠️ **文件名必须是 `airoha-npu.po`，不能写成 `luci-app-airoha-npu.po`**：
+`luci.mk` 的 i18n install 规则：
 
 ```makefile
-# luci.mk 的 i18n install 规则
 $(foreach po,$(wildcard ${CURDIR}/po/$(2)/*.po), \
 	po2lmo $(po) $$(1)$(LUCI_LIBRARYDIR)/i18n/$(basename $(notdir $(po))).$(1).lmo;)
 ```
 
-lmo 名取自 po 文件主名；而 LuCI 前端按 `LUCI_BASENAME`（`luci-app-` 去掉前缀后
-的 `airoha-npu`）查找 lmo。上游那个 es 用的是 `luci-app-airoha-npu.po`，会生成
-`luci-app-airoha-npu.es.lmo`，前端找不到 —— 属于上游命名问题。
-官方 app 都是 basename 命名（`firewall.po`、`package-manager.po`、`pon.po`）。
+lmo 名取自 **po 文件主名**；而运行时按
+`LUCI_BASENAME = $(patsubst luci-app-%,%,luci-app-airoha-npu)` = **`airoha-npu`** 查找。
 
+上游两份 po 都叫 `luci-app-airoha-npu.po` → 生成 `luci-app-airoha-npu.zh-cn.lmo`
+→ 前端要的是 `airoha-npu.zh-cn.lmo` → **找不到，中文不生效**。
 
-启用两步：① 脚本里开关改 `true`；② `configs/<机型>.config` 第 19 段把对应
-`# CONFIG_PACKAGE_xxx is not set` 改成 `=y`。
-
-### diy-part2.sh —— 时区改中国
-
-- 改 `package/base-files/files/bin/config_generate`：`timezone='CST-8'`、`zonename='Asia/Shanghai'`
-- 写 `files/etc/uci-defaults/99-timezone-cn`，保留旧配置升级时也强制刷成中国时区
-- 往 `.config` 追加 `CONFIG_PACKAGE_zoneinfo-asia=y`（LuCI 时区显示与切换需要，基座默认关闭）
-
-## configs 说明
-
-每个机型一份 `configs/<profile>.config`，统一为**精简 diffconfig**（约 450 行），只写与 ponwrt 官方
-`configs/an7581.config` / `an7583.config` 基座的差异。
-
-⚠️ **流程采用「基座打底 + 差异追加」**：先 `cp` 源码自带的 `configs/<soc>.config` 作为 `.config`，
-再把机型精简配置 `cat >>` 追加（后写覆盖先写），最后 `make defconfig` 展开。
-
-这么做是必须的——不少符号是 tristate 且**无 default（默认 n）**，例如：
-- `CONFIG_LUCI_LANG_zh_Hans`（LuCI 中文总开关，默认 n → 不写就丢中文包）
-- `CONFIG_PACKAGE_TAR_*`、`CONFIG_PACKAGE_MAC80211_*`（tar / mac80211 特性开关）
-- `CONFIG_PACKAGE_kmod-mppe`、`CONFIG_PACKAGE_kmod-ovpn-backports`
-
-若直接把精简配置当 `.config` 展开，`defconfig` 会把这些重置成默认 n。先铺基座可保留全部非默认值。
-
-统一规则：
-
-- **NPU 每机型都开**：AN7581 → `airoha-en7581-npu-firmware=y`，AN7583 → `airoha-an7583-npu-firmware=y`，
-  配合 `kmod-nft-offload` + `kmod-nf-flow` 走 PPE 硬件转发（PON 与以太网共用 NPU）。
-- **全部走 ImmortalWrt 组件**：`dnsmasq-full`、`firewall4`、`nftables-json`、`autocore`、`shellsync`、
-  `luci-app-package-manager`、`apk-openssl`。网络栈只有 nftables（`kmod-nft-*` / `kmod-nf-*`），
-  不引入 iptables，也不引入 OpenWrt 官方 feed 的包；PON 相关全部来自 `pon_drivers` / `pon_userspace`。
-- **按 DTS 硬件逐机型裁剪**：光器件（FiberHome BOSA / EN7572 二选一）、PHY（GPY211 / EN8811H / RTL8261N）、
-  WiFi（仅 hg5585f-ct/cu 与 zn515 有 MT7916D）、USB（无口机型整段关闭）。
-- 可选插件（passwall / openclash / mosdns / lucky / tailscale / 主题）全部以注释形式放在第 19 段，
-  由 `diy-part3.sh` 拉取，默认关闭。
-
-段落顺序：
-```
-target/包管理 → DEVICES → PON 内核驱动 → PON 用户态 → PON/IPTV LuCI
-→ nftables 网络转发 → 隧道拨号 → LuCI → 基础服务 → 系统工具
-→ 固件工具 → 内核模块 → 基础库 → 内核选项
-→ 13 光器件 → 14 NPU 卸载 → 15 WiFi → 16 USB → 17 PHY → 18 TF-A → 19 可选插件 → 20 其他
-```
-
-| 机型 | SoC | 光器件 | 2.5G PHY | WiFi | USB | 校准数据 |
-|------|-----|--------|----------|------|-----|----------|
-| fiberhome_hg5382a | AN7581 | FiberHome BOSA (GN28L95/UX3363) | GPY211 | 无 | 无 | factory |
-| fiberhome_hg5585f-ct | AN7581 | FiberHome BOSA | GPY211 | MT7916D | USB0(3.0)+USB1(2.0) | factory |
-| fiberhome_hg5585f-cu | AN7581 | FiberHome BOSA | GPY211 | MT7916D | USB0(3.0)+USB1(2.0) | factory |
-| gemtek_xg2010g | AN7581 | EN7572 | EN8811H + 2×RTL8261N | 无 | 无 | dsd |
-| unionman_ung00a | AN7581 | EN7572 | EN8811H | 无 | 无 | reservearea |
-| nokia_xg-040g-md-ubi | AN7581 | EN7572 | EN8811H | 无 | USB0+USB1（5V 可控） | bosa, ri |
-| nokia_xg-040g-tf-ubi | AN7581 | EN7572 | EN8811H | 无 | USB0+USB1（无 5V 控制） | bosa, ri |
-| znxt_zn504xg-d | AN7581 | EN7572 | EN8811H + 3×GE | 无 | USB1 | reservearea |
-| znxt_zn515xg-d | AN7581 | EN7572 | EN8811H + 3×GE | MT7916D | USB1+USB2 | reservearea |
-| nokia_xg-040g-mf | AN7583 | EN7572 | EN8811H | 无 | USB0 | bosa, ri |
-| nokia_xg-040g-mf-ubi | AN7583 | EN7572 | EN8811H | 无 | USB0 | bosa, ri |
-
-加减插件：把 `# CONFIG_PACKAGE_x is not set` 改成 `CONFIG_PACKAGE_x=y` 即开启，反向即关闭。
-
-## 用法
-
-1. Fork 本仓库，Settings → Actions 打开 Workflow 权限（Read and write）。
-2. Actions → `Build PonWrt (Airoha AN758x PON)` → Run workflow，选参数：
-
-| 参数 | 说明 |
-|------|------|
-| `branch` | ponwrt 源码分支，默认 `master` |
-| `soc` | `an7581` / `an7583`，选 `all` 机型时生效，其他情况按机型自动校正 |
-| `profile` | 机型，默认 `fiberhome_hg5585f-cu`；`all` = 该 SoC 下全机型编译（见下） |
-| `scope` | `firmware` 出固件；`toolchain-only` 只编译并缓存工具链 |
-| `ignore_cache` | `true` 时忽略缓存强制重编工具链 |
-| `upload_release` | `true` 把固件发到 Release（默认开）；`false` 只传 Artifact |
-| `ssh` | `true` 进入 tmate 调试 |
-
-3. 产物：
-   - Artifact：`OpenWrt_firmware_ponwrt-<soc>-<profile>_<时间>`（无论 `upload_release` 开关都会传）
-   - Release：tag `ponwrt-<soc>-<profile>-<branch>-<时间戳>`，含固件 + sha256 校验 + 机型/校准数据说明
-
-## profile=all 的行为
-
-选 `all` 时**不裁剪机型**，保留源码基座里已选中的全部机型一次性编译：
-
-| SoC | 机型数 | profile |
-|-----|-------|---------|
-| an7581 | 9 | hg5382a、hg5585f-ct、hg5585f-cu、gemtek_xg2010g、unionman_ung00a、nokia_xg-040g-md-ubi、nokia_xg-040g-tf-ubi、znxt_zn504xg-d、znxt_zn515xg-d |
-| an7583 | 2 | nokia_xg-040g-mf、nokia_xg-040g-mf-ubi |
-
-用的是 `configs/an7581.config` / `configs/an7583.config`（SoC 通用配置）。
-
-机制上是 `CONFIG_TARGET_MULTI_PROFILE=y` + `CONFIG_TARGET_PER_DEVICE_ROOTFS=y`：
-**工具链和内核只编一次，但每个机型各出一份 rootfs + 镜像**。所以不是 9 倍耗时，
-约单机型的 3~5 倍。
-
-⚠️ 两点注意：
-- 全机型无法按硬件裁剪，光器件（BOSA + EN7572）、三种 PHY、WiFi、USB 全部开启。
-  各机型启动时由 DTS 匹配自己需要的驱动，多余模块不会被加载。
-- 免费 runner 上限 6h，全机型大概率超时。要用就先跑 `scope=toolchain-only`
-  建好缓存，并把 workflow 的 `timeout-minutes` 调大。
+官方 app 都是 basename 命名：`firewall.po`、`package-manager.po`、`pon.po`。
+故 diy-part1.sh 在 clone 后把 `po/zh_Hans/*.po` 改名为 `airoha-npu.po`（幂等）。
 
 ## PON 光模块状态上概览页
 

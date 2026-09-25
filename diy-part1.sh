@@ -66,8 +66,13 @@ clone() {  # clone <url> <dir> [branch]
 # --- Airoha SoC 状态页（NPU 卸载 / CPU 频率 / Frame Engine / PPE 流表）---
 # 包名由目录名决定（luci.mk: PKG_NAME ?= $(notdir ${CURDIR})），
 # 目录必须是 luci-app-airoha-npu，否则 config 里的符号对不上。
+#
+# 源用 luanmuc/luci-app-airoha-npu（rchen14b 的 fork 改进版）：
+#   - 自带 po/zh_Hans 完整中文翻译（48 条）
+#   - 无 rchen14b 那种「根目录 + 同名子目录」重复结构，feed 索引不会中断
+#   - 修了 luci.mk 的 include 路径、加了独立 CPU 温度与 PLL 备用频率
 if [ "$ADD_AIROHA_NPU" = "true" ]; then
-  if ! clone https://github.com/rchen14b/luci-app-airoha-npu "$PKG_DIR/luci-app-airoha-npu" main; then
+  if ! clone https://github.com/luanmuc/luci-app-airoha-npu "$PKG_DIR/luci-app-airoha-npu" main; then
     echo "::error::luci-app-airoha-npu 拉取失败，后续 defconfig 会静默剔除该包"
     exit 1
   fi
@@ -77,18 +82,31 @@ if [ "$ADD_AIROHA_NPU" = "true" ]; then
     echo "::error::$PKG_DIR/luci-app-airoha-npu/Makefile 不存在，包无法被索引"
     exit 1
   fi
-  echo "   包名: $(grep -m1 '^PKG_NAME' "$PKG_DIR/luci-app-airoha-npu/Makefile" 2>/dev/null || echo '(由目录名推断)' )"
+  echo "   版本: $(grep -m1 '^PKG_VERSION' "$PKG_DIR/luci-app-airoha-npu/Makefile" 2>/dev/null)"
 
-  # 注入简体中文翻译（上游 po/ 只有 es 和 templates，没有 zh_Hans）
-  # 文件名必须是 airoha-npu.po（= LUCI_BASENAME），不能用 luci-app-airoha-npu.po：
-  # luci.mk 的 install 规则是 po2lmo $(po) → $(basename $(notdir $(po))).$(lang).lmo，
-  # 而 LuCI 前端按 LUCI_BASENAME 查找 lmo，故必须是 airoha-npu.zh-cn.lmo。
-  if [ -d "${GITHUB_WORKSPACE}/po/luci-app-airoha-npu/zh_Hans" ]; then
-    mkdir -p "$PKG_DIR/luci-app-airoha-npu/po/zh_Hans"
-    cp "${GITHUB_WORKSPACE}"/po/luci-app-airoha-npu/zh_Hans/*.po \
-       "$PKG_DIR/luci-app-airoha-npu/po/zh_Hans/"
-    echo "✅ 已注入 luci-app-airoha-npu 简体中文翻译"
+  # =========================================================
+  # 关键：po 文件名必须改成 airoha-npu.po
+  #
+  # luci.mk 的 i18n install 规则：
+  #   po2lmo $(po) → $(LUCI_LIBRARYDIR)/i18n/$(basename $(notdir $(po))).$(lang).lmo
+  # 即 lmo 名取自 po 文件主名。而运行时按
+  #   LUCI_BASENAME = $(patsubst luci-app-%,%,luci-app-airoha-npu) = airoha-npu
+  # 查找 lmo。上游两份 po 都叫 luci-app-airoha-npu.po，
+  # 会生成 luci-app-airoha-npu.zh-cn.lmo，前端找不到 → 中文不生效。
+  # 官方 app 都是 basename 命名（firewall.po / package-manager.po / pon.po）。
+  # =========================================================
+  PODIR="$PKG_DIR/luci-app-airoha-npu/po"
+  if [ -f "$PODIR/zh_Hans/luci-app-airoha-npu.po" ]; then
+    # 确保 Language 头是 zh_Hans（上游头部缺该字段时 po2lmo 可能识别异常）
+    grep -q '^"Language:' "$PODIR/zh_Hans/luci-app-airoha-npu.po" || \
+      sed -i 's/^msgstr ""$/msgstr ""\n"Language: zh_Hans\\n"/' "$PODIR/zh_Hans/luci-app-airoha-npu.po"
+    mv "$PODIR/zh_Hans/luci-app-airoha-npu.po" "$PODIR/zh_Hans/airoha-npu.po"
+    echo "✅ po 改名: luci-app-airoha-npu.po -> airoha-npu.po（luci.mk 按 LUCI_BASENAME 查找）"
   fi
+  if [ -f "$PODIR/es/luci-app-airoha-npu.po" ]; then
+    mv "$PODIR/es/luci-app-airoha-npu.po" "$PODIR/es/airoha-npu.po"
+  fi
+  echo "   po/zh_Hans: $(ls -1 "$PODIR/zh_Hans/" 2>/dev/null | tr '\n' ' ')"
 fi
 
 # --- passwall ---
