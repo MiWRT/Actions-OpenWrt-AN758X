@@ -113,7 +113,22 @@ return view.extend({
 		var s = m.section(form.NamedSection, 'main', 'natmode');
 		s.anonymous = false;
 
-		var o = s.option(form.RadioValue, 'mode', _('NAT 类型'));
+		// =========================================================
+		// 必须用 form.ListValue + widget='radio'，不能用 form.RadioValue！
+		//
+		// luci-base 的 form.js 里根本没有 RadioValue 这个类：
+		//   可选类只有 Value / DynamicList / ListValue / RichListValue /
+		//   RangeSliderValue / Flag / MultiValue / TextValue / DummyValue /
+		//   Button / HiddenValue / FileUpload / DirectoryPicker / SectionValue
+		// 传 undefined 进去，AbstractSection.option() 做
+		//   L.Class.isSubclass(...) 检查失败 → 抛
+		//   TypeError: Class must be a descendant of CBIAbstractValue
+		//
+		// ListValue 支持 widget='select'（默认）或 'radio'，
+		// 配合 orientation='vertical' 就是竖排单选按钮。
+		// =========================================================
+		var o = s.option(form.ListValue, 'mode', _('NAT 类型'));
+		o.widget = 'radio';
 		o.orientation = 'vertical';
 		o.value('fullcone',
 			_('全锥形NAT') + '（NAT1）— ' +
@@ -143,6 +158,26 @@ return view.extend({
 			});
 		};
 
-		return E('div', {}, [ renderStatus(st), m.render() ]);
+		// =========================================================
+		// m.render() 返回的是 Promise，不是 DOM 节点！
+		//
+		// form.js: CBIMap.prototype.render()
+		//   render() { return this.load().then(this.renderContents.bind(this)); }
+		// 而 renderContents() → renderChildren().then(nodes => ...)
+		//
+		// 若直接 E('div', {}, [ 状态块, m.render() ])，Promise 不会被 E()
+		// 解析，页面上就显示 "[object Promise]" —— 表单（单选按钮）
+		// 根本没渲染出来，于是无法更改 NAT 类型。
+		//
+		// 正确做法：等 Promise resolve 拿到节点数组，再组装。
+		// =========================================================
+		return m.render().then(function(nodes) {
+			var kids = [ renderStatus(st) ];
+			if (Array.isArray(nodes))
+				kids = kids.concat(nodes);
+			else if (nodes != null)
+				kids.push(nodes);
+			return E('div', {}, kids);
+		});
 	}
 });
