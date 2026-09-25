@@ -171,6 +171,39 @@ CPU: 58.7°C, WiFi: 46.0°C 48.0°C, PON: 48.5°C ↑2.41dBm ↓-21.30dBm 12.50m
 `/usr/share/rpcd/acl.d/luci-mod-status-autocore.json` **无条件**授权 `luci.getTempInfo`
 （只有 tempinfo 脚本本身受平台限制）。所以只要 `autocore=y` + `luci-base=y` 就通。
 
+### 疑难排查：温度显示 "?"
+
+`luci-base` 的 rpcd ucode 插件（`root/usr/share/rpcd/ucode/luci`）：
+
+```ucode
+getTempInfo: {
+    call: function() {
+        if (!access('/sbin/tempinfo')) return {};   // access = F_OK，只验证存在
+        const fd = popen('/sbin/tempinfo');
+        let tempinfo = fd.read('all');
+        if (!tempinfo) tempinfo = '?';              // 空输出 → '?'
+        return { tempinfo: tempinfo };
+    }
+}
+```
+
+| 症状 | 原因 |
+|------|------|
+| 温度行**不显示** | `/sbin/tempinfo` 不存在（插件 `return {}`）|
+| 温度行显示 **?** | 文件存在但**缺 +x** → `popen` 失败 → stdout 空 |
+
+`access()` 是 F_OK，只看存在不看可执行，所以权限问题会走到 popen 分支变成 `?`。
+
+本仓库两道保险：
+
+1. workflow 第 6 步 `chmod +x files/sbin/*`（git checkout 可能丢 exec bit）
+2. `files/etc/uci-defaults/98-tempinfo-perm` 首次开机再补一次
+
+uci-defaults 由 `/etc/init.d/boot` 以 source 方式执行（`. "$i"`），自身不需 +x，
+即使打包时权限再丢也能救回来。返回 0 后被自动删除。
+
+已刷机的设备直接 `chmod +x /sbin/tempinfo` 即可，刷新页面生效，无需重启 rpcd。
+
 ### 开关：SHOW_PON_OPTICS
 
 `tempinfo` 顶部有一个开关：
