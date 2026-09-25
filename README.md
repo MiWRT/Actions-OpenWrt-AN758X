@@ -185,6 +185,81 @@ target/包管理 → DEVICES → PON 内核驱动 → PON 用户态 → PON/IPTV
 - 自带 rpcd ACL（`luci-app-pon-status` 组），授权 `ponctl --device * status --json` 的 exec。
   与 `luci-app-pon` 用不同组名，避免 acl.d 同名覆盖。
 
+## 概览页「温度」一栏
+
+别的 AN758x 固件概览页有「温度：CPU 58.7°C, WiFi 46.0°C」这一行，ponwrt 原生没有。
+原因是**这一行不是插件提供的，而是 autocore 的一个条件安装文件**：
+
+### 机制
+
+```
+luci-mod-status 的 10_system.js
+  → callTempInfo()  → rpcd: luci.getTempInfo  → 执行 /sbin/tempinfo
+  → 输出非空则 fields.splice 插入「温度」行
+```
+
+`10_system.js` 里的判断就是 `if (tempinfo.tempinfo)`，即 `/sbin/tempinfo` 有输出才显示。
+
+### 为什么 ponwrt 没有
+
+autocore 的 Makefile：
+
+```makefile
+ifneq ($(filter ipq% mediatek% qualcommax%, $(TARGETID)),)
+	$(INSTALL_BIN) ./files/tempinfo $(1)/sbin/
+endif
+```
+
+只对 `ipq*` / `mediatek*` / `qualcommax*` 安装 `tempinfo`。
+**airoha（AN7581/AN7583）不在列表里**，所以 ponwrt 编出来的固件没有 `/sbin/tempinfo`，
+概览页也就没有温度行。（ponwrt 自己 `package/emortal/autocore` 也是这份 Makefile，未做适配。）
+
+### 本仓库的解决方式
+
+直接放一份 `files/sbin/tempinfo` 覆盖进 rootfs（autocore 在 airoha 上不装同名文件，不冲突）：
+
+- **CPU**：`/sys/class/thermal/thermal_zone0/temp`
+- **WiFi**：mt76 的 hwmon，`phy*/hwmon*/temp1_input` 和
+  `phy*/device/hwmon/hwmon*/temp1_input` 两个路径都试（mt76 两种挂法都见过）
+- **PON**：`ponctl --device <dev> status --json` + `jsonfilter`，
+  取 `frontend` 组的 `temperature_celsius` / `rx_power_dbm` / `tx_power_dbm` /
+  `tx_bias_ma` / `voltage_volts`（airoha-ponctl 的 `convert_optics()` 已换算成显示单位）
+
+输出示例：
+
+```
+CPU: 58.7°C, WiFi: 46.0°C 48.0°C, PON: 48.5°C ↑2.41dBm ↓-21.30dBm 12.50mA 3.30V
+```
+
+授权不需要额外处理 —— autocore 装的
+`/usr/share/rpcd/acl.d/luci-mod-status-autocore.json` **无条件**授权 `luci.getTempInfo`
+（只有 tempinfo 脚本本身受平台限制）。所以只要 `autocore=y` + `luci-base=y` 就通。
+
+### 开关：SHOW_PON_OPTICS
+
+`tempinfo` 顶部有一个开关：
+
+```sh
+SHOW_PON_OPTICS=1    # 温度行附带 PON 光功率/电流/电压
+SHOW_PON_OPTICS=0    # 只显示温度（CPU / WiFi / PON）
+```
+
+设为 `0` 时输出：`CPU: 58.7°C, WiFi: 46.0°C 48.0°C, PON: 48.5°C`
+
+⚠️ 取舍：`SHOW_PON_OPTICS=1` 会把 dBm / mA / V 塞进标题为「温度」的一行，语义上不严谨，
+且一行较长。**若已启用 `luci-app-pon-status`**（概览页有独立的「PON 光模块」卡片，
+表格形式每指标一行），建议设 `0`，避免同一数值出现两次。
+
+依赖：`airoha-ponctl`（`ponctl`）、`jsonfilter`、`uci` —— 配置里均已 `=y`。
+脚本对三者都做了 `-x` 存在性检查，缺任一则自动跳过 PON 段，不影响 CPU/WiFi 显示。
+
+### 一点开销说明
+
+概览页轮询间隔 3 秒，故 `tempinfo` 每 3 秒执行一次 `ponctl`。
+`ponctl` 是 Rust 二进制、只读 sysfs，开销可忽略。
+但注意 `luci-app-pon-status` 卡片同样每 3 秒调一次 `ponctl`，
+两者叠加即约每 1.5 秒一次 `ponctl` 调用 —— 若在意，把 `SHOW_PON_OPTICS` 设 `0` 即可减半。
+
 ## Release 行为
 
 - 只有 `scope=firmware` 且编译成功才发 Release；`toolchain-only` 不发。
