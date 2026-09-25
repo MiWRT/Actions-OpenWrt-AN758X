@@ -1,10 +1,11 @@
 #!/bin/sh /etc/rc.common
 # SPDX-License-Identifier: Apache-2.0
 #
-# natmode —— 开机 / 防火墙重载后重新应用 NAT 模式
+# natmode —— 开机应用 NAT 模式；firewall 重载后重建 nft 规则
 #
-# START=25 必须晚于 firewall（START=19），否则对称型插到 fw4 里的
-# fully-random 规则会被随后的 fw4 reload 清掉。
+# START=25 必须晚于 firewall（START=19）：
+#   fw4 每次 reload 会重建整张 ruleset，插入的 fully-random 规则随之消失。
+#   若本服务早于 firewall 启动，规则会被随后的 fw4 冲掉。
 
 START=25
 STOP=90
@@ -12,16 +13,25 @@ STOP=90
 USE_PROCD=1
 
 start_service() {
+	# 必须开一个实例，否则 procd 不会把 service_triggers 里的
+	# reload 触发器真正注册上（触发器挂在实例上），
+	# firewall 变化时就不会回调本服务。
+	procd_open_instance
+	procd_close_instance
+
 	/usr/sbin/natmode-apply apply >/dev/null 2>&1
 }
 
+# firewall 重载后被回调：
+# 只重建 nft 规则（reapply），不写 firewall UCI ——
+# 否则会把用户在防火墙页面的改动反向覆盖回去。
 reload_service() {
-	/usr/sbin/natmode-apply apply >/dev/null 2>&1
+	/usr/sbin/natmode-apply reapply >/dev/null 2>&1
 }
 
 stop_service() {
-	# 退出时移除 fully-random，避免残留影响后续手动改防火墙
-	uci -q get natmode.main.mode >/dev/null 2>&1 || return 0
+	# 卸载时移除随机端口规则，避免残留影响手动改防火墙
+	/usr/sbin/natmode-apply reapply >/dev/null 2>&1
 	return 0
 }
 
@@ -30,6 +40,7 @@ boot() {
 }
 
 service_triggers() {
-	# firewall 重载时同步重新应用（用户改防火墙不会丢掉 NAT 模式）
+	# firewall 配置变化（含在防火墙页面点保存并应用）时回调 reload_service
 	procd_add_reload_trigger firewall
+	procd_add_reload_trigger natmode
 }

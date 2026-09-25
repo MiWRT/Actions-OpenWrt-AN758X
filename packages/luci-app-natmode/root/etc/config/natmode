@@ -8,3 +8,11 @@ config natmode 'main'
 	#   symmetric  = 全对称型 NAT (NAT4) —— 端口完全随机，映射不可预测
 	#                最严格，打洞基本不可用，仅用于特殊合规/隐匿场景
 	option mode 'fullcone'
+
+	# 应用 NAT4 时自动关闭「路由/NAT 卸载」。
+	# 原因：卸载（尤其硬件卸载走 PPE）会把流量绕过 conntrack 直接转发，
+	#       nft 的 masquerade fully-random 根本不参与 → NAT4 只是配置上了，
+	#       实测仍是 NAT3。
+	# 代价：关闭后吞吐会下降（硬件转发失效）。
+	# 置 0 则保留卸载，但 NAT4 无法真正生效。
+	option auto_offload '1'
