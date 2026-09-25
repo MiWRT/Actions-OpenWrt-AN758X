@@ -20,15 +20,17 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 
 ### diy-part1.sh —— 拉插件
 
-**默认开启（硬件状态监控两件套，config 里已 `=y`）**：
+**默认开启**：
 
 | 开关 | 包 | 作用 |
 |------|-----|------|
 | `ADD_AIROHA_NPU` | `luci-app-airoha-npu` | Airoha SoC 状态页：NPU 卸载 / CPU 频率与超频 / Frame Engine / PPE 流表 |
-| `ADD_TEMP_STATUS` | `luci-app-temp-status` | CPU + WiFi 芯片温度显示在「状态 → 概览」页 |
 
 另外 CI 仓库自带一个本地包（`packages/luci-app-pon-status`，不走 clone，由 diy-part1.sh 拷进
-`package/custom`）：把 **PON 光模块的温度、收光功率、发光功率** 显示在概览页。
+`package/custom`）：把 **PON 光模块的温度、收光功率、发光功率** 以表格形式显示在概览页。
+
+> **已移除 `luci-app-temp-status`**：温度统一由 autocore 的 `/sbin/tempinfo`
+> 提供（见下节），功能重叠，无需再装该插件。
 
 其余默认关闭：`ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
 `ADD_TAILSCALE` / `ADD_OPENLIST` / `ADD_SMARTDNS`。
@@ -36,11 +38,11 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 ⚠️ 两点：
 - 拉取目录名必须等于包名（`luci.mk: PKG_NAME ?= $(notdir ${CURDIR})`），
   改目录名会导致 config 里的符号对不上。
-- 默认开启的两个若拉取失败，脚本会 `::error::` 退出——否则 `defconfig` 会静默剔除，
-  编出缺状态页的固件还不易察觉。要关就把开关和 config 里的 `=y` 一起改。
+- 默认开启的 `luci-app-airoha-npu` 若拉取失败，脚本会 `::error::` 退出——否则 `defconfig`
+  会静默剔除，编出缺状态页的固件还不易察觉。要关就把开关和 config 里的 `=y` 一起改。
 
-两个插件的中文情况：`luci-app-temp-status` 带 `po/zh_Hans`，`LUCI_LANG_zh_Hans=y` 会自动选中
-其 `zh-cn` 包；`luci-app-airoha-npu` 的 po 只有 es，**界面为英文**（上游未提供中文模板）。
+中文情况：`luci-app-airoha-npu` 的 po 只有 es，**界面为英文**（上游未提供中文模板）。
+`luci-app-pon-status` 的文案写在 JS 里，已直接用中文。
 
 
 启用两步：① 脚本里开关改 `true`；② `configs/<机型>.config` 第 19 段把对应
@@ -246,9 +248,24 @@ SHOW_PON_OPTICS=0    # 只显示温度（CPU / WiFi / PON）
 
 设为 `0` 时输出：`CPU: 58.7°C, WiFi: 46.0°C 48.0°C, PON: 48.5°C`
 
-⚠️ 取舍：`SHOW_PON_OPTICS=1` 会把 dBm / mA / V 塞进标题为「温度」的一行，语义上不严谨，
-且一行较长。**若已启用 `luci-app-pon-status`**（概览页有独立的「PON 光模块」卡片，
-表格形式每指标一行），建议设 `0`，避免同一数值出现两次。
+本仓库**默认设为 `0`**，因为 `luci-app-pon-status` 卡片已用表格形式完整展示
+收发光/电流/电压，两者会重复。若你想只要一行、不装 pon-status 卡片，改回 `1` 即可。
+
+⚠️ 取舍：`SHOW_PON_OPTICS=1` 会把 dBm / mA / V 塞进标题为「温度」的一行，语义不严谨且行较长。
+
+### 与 luci-app-temp-status 的关系
+
+**已移除该插件**，两者功能重叠：
+
+| | autocore tempinfo | luci-app-temp-status |
+|---|---|---|
+| CPU 温度 | ✅ | ✅ |
+| WiFi 温度 | ✅ | ✅ |
+| PON 温度/光功率 | ✅（本仓库扩展）| ❌ |
+| 依赖 | 仅 shell + autocore + ponctl | `ucode` + `ucode-mod-fs` |
+
+保留 autocore 方案：它是 ImmortalWrt 原生机制，无额外依赖，且能顺带扩展 PON。
+移除后也省掉了 `ucode-mod-fs` 等间接项的体积（虽小）。
 
 依赖：`airoha-ponctl`（`ponctl`）、`jsonfilter`、`uci` —— 配置里均已 `=y`。
 脚本对三者都做了 `-x` 存在性检查，缺任一则自动跳过 PON 段，不影响 CPU/WiFi 显示。

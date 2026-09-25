@@ -16,10 +16,12 @@ mkdir -p "$PKG_DIR"
 
 # ---------------------------------------------------------
 # 插件开关
-# 默认开启：硬件状态监控两件套（config 里已 =y，必须拉否则 defconfig 会剔除）
+# 默认开启：Airoha SoC 状态页（config 里已 =y，必须拉否则 defconfig 会剔除）
+#
+# 温度不再用 luci-app-temp-status —— 由 autocore 的 /sbin/tempinfo 提供，
+# 见 files/sbin/tempinfo（概览页「温度」行：CPU / WiFi / PON 温度 + 光功率）
 # ---------------------------------------------------------
 ADD_AIROHA_NPU=true    # luci-app-airoha-npu：Airoha SoC 状态页（NPU/CPU/Frame Engine/PPE）
-ADD_TEMP_STATUS=true   # luci-app-temp-status：CPU + WiFi 温度显示在概览页
 
 ADD_PASSWALL=false     # luci-app-passwall（含依赖源）
 ADD_OPENCLASH=false    # luci-app-openclash ⚠ 依赖 Ruby/Rust，编译极慢
@@ -60,11 +62,6 @@ clone() {  # clone <url> <dir> [branch]
 # 目录必须是 luci-app-airoha-npu，否则 config 里的符号对不上。
 if [ "$ADD_AIROHA_NPU" = "true" ]; then
   clone https://github.com/rchen14b/luci-app-airoha-npu "$PKG_DIR/luci-app-airoha-npu" main
-fi
-
-# --- 温度状态（CPU + WiFi 芯片温度，显示在状态-概览页）---
-if [ "$ADD_TEMP_STATUS" = "true" ]; then
-  clone https://github.com/gSpotx2f/luci-app-temp-status "$PKG_DIR/luci-app-temp-status" master
 fi
 
 # --- passwall ---
@@ -115,10 +112,6 @@ fi
 # ---------------------------------------------------------
 if [ "$ADD_AIROHA_NPU" = "true" ] && [ ! -d "$PKG_DIR/luci-app-airoha-npu" ]; then
   echo "::error::luci-app-airoha-npu 未拉到，config 里的 =y 会被 defconfig 剔除"
-  exit 1
-fi
-if [ "$ADD_TEMP_STATUS" = "true" ] && [ ! -d "$PKG_DIR/luci-app-temp-status" ]; then
-  echo "::error::luci-app-temp-status 未拉到，config 里的 =y 会被 defconfig 剔除"
   exit 1
 fi
 
