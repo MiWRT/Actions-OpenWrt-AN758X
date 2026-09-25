@@ -29,8 +29,6 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 另外 CI 仓库自带一个本地包（`packages/luci-app-pon-status`，不走 clone，由 diy-part1.sh 拷进
 `package/custom`）：把 **PON 光模块的温度、收光功率、发光功率** 以表格形式显示在概览页。
 
-> **已移除 `luci-app-temp-status`**：温度统一由 autocore 的 `/sbin/tempinfo`
-> 提供（见下节），功能重叠，无需再装该插件。
 
 其余默认关闭：`ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
 `ADD_TAILSCALE` / `ADD_OPENLIST` / `ADD_SMARTDNS`。
@@ -41,43 +39,6 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 - 默认开启的 `luci-app-airoha-npu` 若拉取失败，脚本会 `::error::` 退出——否则 `defconfig`
   会静默剔除，编出缺状态页的固件还不易察觉。要关就把开关和 config 里的 `=y` 一起改。
 
-中文情况：`luci-app-pon-status` 的文案写在 JS 里，已直接用中文。
-`luci-app-airoha-npu` 用 luanmuc 版，**自带完整中文翻译**，见下节。
-
-### luci-app-airoha-npu 的源与中文
-
-**源仓库：`luanmuc/luci-app-airoha-npu`**（`rchen14b` 的 fork 改进版）：
-
-| | rchen14b（原版）| luanmuc（本仓库选用）|
-|---|---|---|
-| 中文翻译 | ❌ po/ 只有 es + templates | ✅ 自带 `po/zh_Hans`，48 条全翻 |
-| 仓库结构 | ⚠ 根目录 + 同名子目录各一份，feed 索引会中断 | ✅ 单层，正常 |
-| luci.mk 路径 | 需 feeds 在固定位置 | ✅ 已修 |
-
-config 里两个符号都开：
-
-```
-CONFIG_PACKAGE_luci-app-airoha-npu=y
-CONFIG_PACKAGE_luci-i18n-airoha-npu-zh-cn=y
-```
-
-#### po 文件名必须改名（diy-part1.sh 已自动处理）
-
-`luci.mk` 的 i18n install 规则：
-
-```makefile
-$(foreach po,$(wildcard ${CURDIR}/po/$(2)/*.po), \
-	po2lmo $(po) $$(1)$(LUCI_LIBRARYDIR)/i18n/$(basename $(notdir $(po))).$(1).lmo;)
-```
-
-lmo 名取自 **po 文件主名**；而运行时按
-`LUCI_BASENAME = $(patsubst luci-app-%,%,luci-app-airoha-npu)` = **`airoha-npu`** 查找。
-
-上游两份 po 都叫 `luci-app-airoha-npu.po` → 生成 `luci-app-airoha-npu.zh-cn.lmo`
-→ 前端要的是 `airoha-npu.zh-cn.lmo` → **找不到，中文不生效**。
-
-官方 app 都是 basename 命名：`firewall.po`、`package-manager.po`、`pon.po`。
-故 diy-part1.sh 在 clone 后把 `po/zh_Hans/*.po` 改名为 `airoha-npu.po`（幂等）。
 
 ## PON 光模块状态上概览页
 
@@ -121,34 +82,6 @@ lmo 名取自 **po 文件主名**；而运行时按
 - 自带 rpcd ACL（`luci-app-pon-status` 组），授权 `ponctl --device * status --json` 的 exec。
   与 `luci-app-pon` 用不同组名，避免 acl.d 同名覆盖。
 
-## 概览页「温度」一栏
-
-别的 AN758x 固件概览页有「温度：CPU 58.7°C, WiFi 46.0°C」这一行，ponwrt 原生没有。
-原因是**这一行不是插件提供的，而是 autocore 的一个条件安装文件**：
-
-### 机制
-
-```
-luci-mod-status 的 10_system.js
-  → callTempInfo()  → rpcd: luci.getTempInfo  → 执行 /sbin/tempinfo
-  → 输出非空则 fields.splice 插入「温度」行
-```
-
-`10_system.js` 里的判断就是 `if (tempinfo.tempinfo)`，即 `/sbin/tempinfo` 有输出才显示。
-
-### 为什么 ponwrt 没有
-
-autocore 的 Makefile：
-
-```makefile
-ifneq ($(filter ipq% mediatek% qualcommax%, $(TARGETID)),)
-	$(INSTALL_BIN) ./files/tempinfo $(1)/sbin/
-endif
-```
-
-只对 `ipq*` / `mediatek*` / `qualcommax*` 安装 `tempinfo`。
-**airoha（AN7581/AN7583）不在列表里**，所以 ponwrt 编出来的固件没有 `/sbin/tempinfo`，
-概览页也就没有温度行。（ponwrt 自己 `package/emortal/autocore` 也是这份 Makefile，未做适配。）
 
 ### 本仓库的解决方式
 
@@ -187,9 +120,6 @@ SHOW_PON_OPTICS=0    # 只显示温度（CPU / WiFi / PON）
 
 ⚠️ 取舍：`SHOW_PON_OPTICS=1` 会把 dBm / mA / V 塞进标题为「温度」的一行，语义不严谨且行较长。
 
-### 与 luci-app-temp-status 的关系
-
-**已移除该插件**，两者功能重叠：
 
 | | autocore tempinfo | luci-app-temp-status |
 |---|---|---|
