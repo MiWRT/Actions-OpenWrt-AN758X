@@ -449,19 +449,47 @@ SHOW_PON_OPTICS=0    # 只显示温度（CPU / WiFi / PON）
   10GB 配额很快被刷满，并淘汰掉真正有用的旧缓存；
 - 改成周号后，同一周内多次运行复用同一条目，`restore-keys` 仍能跨周命中。
 
-### ccache 必须两项同时开
+### ccache：默认关闭，按需开启
 
-workflow 的 `USE_CCACHE: true` 与「Cache ccache」步骤，只负责**存取**；
-是否真的使用 ccache 由 `rules.mk` 里的 `CONFIG_CCACHE` 决定。
+ccache 默认**关闭**（`USE_CCACHE: false`，config 里也不写 `CONFIG_CCACHE`）。
+原因是一个真实的缓存一致性陷阱：
 
-13 份 config 里都有：
+`tools/Makefile`：
 
+```makefile
+ifneq ($(CONFIG_CCACHE)$(CONFIG_SDK),)
+  tools-y += ccache xxhash
+endif
 ```
-CONFIG_CCACHE=y
+
+即 **ccache 二进制只在 `CONFIG_CCACHE` 生效时才由 `make tools/install` 编入**
+`staging_dir/host/bin`。而 `rules.mk`：
+
+```makefile
+ifneq ($(CONFIG_CCACHE),)
+  TARGET_CC:= ccache $(TARGET_CC)
+  export CCACHE_DIR:=$(TOPDIR)/.ccache
+endif
 ```
 
-**缺这一项的话 `.ccache` 目录根本不会生成，缓存步骤会缓存一个空目录。**
-（这也是早期版本 ccache 完全空转的原因。）
+于是出现这种失败：
+
+| 时序 | 结果 |
+|------|------|
+| 工具链缓存是**未开 ccache** 时建立的 | 缓存里没有 `staging_dir/host/bin/ccache` |
+| 之后开启 `CONFIG_CCACHE=y` + 缓存命中 | `make tools/install` 被跳过 → ccache 没被补装 |
+| 编译任何包 | `/bin/sh: 1: .../staging_dir/host/bin/ccache: not found`（**Error 127**）|
+
+要开启 ccache，**只改一处**：workflow 的 `USE_CCACHE: true`。
+流程里「Setup ccache (opt-in)」步骤会：
+
+1. 自动往 `.config` 追加 `CONFIG_CCACHE=y` 并 `make defconfig`；
+2. 检测 `staging_dir/host/bin/ccache`，缺失就 `make tools/ccache/install` 补装
+   （ccache 依赖 `xxhash` → `cmake`，首次会多花几分钟）；
+3. 补装失败则自动把 `CONFIG_CCACHE` 改回 `is not set` 并继续编译 ——
+   **绝不会因为 ccache 让整次构建失败**。
+
+> 提醒：开启后 `.ccache` 会额外占用磁盘，注意 runner 剩余空间。
 
 ## 首次使用建议
 
