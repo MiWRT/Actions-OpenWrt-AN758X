@@ -146,10 +146,25 @@ fi
 # 让新包进入索引
 # ---------------------------------------------------------
 if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
-  # 强制重建包索引：新 clone 的包必须让 metadata.pl 重新扫描，
-  # 否则 defconfig 可能沿用旧的 tmp/.packageinfo，把 =y 当无效符号剔除
+
+  # =========================================================
+  # 关键：把 package/custom 注册为 feed（src-link）
+  # 否则 buildroot 的 metadata.pl 不会扫描这个目录，
+  # 包符号压根不会生成，defconfig 就会把 .config 里
+  # "CONFIG_PACKAGE_xxx=y" 当作无效符号静默删除 —— 不报错，
+  # 表现为 clone 成功、目录存在，但固件里没有这个包。
+  # =========================================================
+  if ! grep -qE "^src-link[[:space:]]+custom" feeds.conf.default; then
+    echo "src-link custom $PWD/package/custom" >> feeds.conf.default
+    echo "✅ 已注册 feed: src-link custom $PWD/package/custom"
+  else
+    echo "feed 已注册: $(grep -E '^src-link[[:space:]]+custom' feeds.conf.default)"
+  fi
+
+  # 强制重建包索引，避免沿用旧的 tmp/.packageinfo
   rm -f tmp/.packageinfo tmp/.targetinfo 2>/dev/null
 
+  ./scripts/feeds update custom 2>&1 | tail -3
   ./scripts/feeds install -a >/dev/null 2>&1 || true
 
   echo "=========================================="
@@ -160,6 +175,11 @@ if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
     [ -d "$d" ] || continue
     echo "  $(basename "$d") : $([ -f "$d/Makefile" ] && echo 'Makefile ✓' || echo 'Makefile ✗ 缺失')"
   done
+  echo "------------------------------------------"
+  echo "feeds 符号链接 package/feeds/custom/ :"
+  ls -1 package/feeds/custom/ 2>/dev/null || echo "  ⚠ package/feeds/custom 不存在（索引可能失败）"
+  echo "------------------------------------------"
+  echo "luci.mk: $([ -f feeds/luci/luci.mk ] && echo '✓' || echo '✗ 缺失（luci app 无法解析）')"
   echo "=========================================="
 else
   echo "未启用任何第三方插件"
