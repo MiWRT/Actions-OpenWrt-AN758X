@@ -341,7 +341,14 @@ jobs:
           if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
             OPT_MISS="$OPT_MISS $p"
             echo "::warning::${p} 在 defconfig 后未启用"
-            echo "  目录: $([ -d "package/custom/${p}" ] && echo '存在' || echo '不存在 package/custom/${p}')"
+            echo "  --- 诊断 ---"
+            echo "  1) 包目录: $([ -d "package/custom/${p}" ] && echo '存在' || echo '不存在')"
+            echo "  2) feeds 链接: $([ -e "package/feeds/custom/${p}" ] && echo '存在' || echo '不存在')"
+            echo "  3) .packageinfo 记录: $(grep -c "Package: ${p}\$" tmp/.packageinfo 2>/dev/null || echo 0)"
+            echo "  4) feeds.conf 中 custom: $(grep -cE '^src-link[[:space:]]+custom' feeds.conf.default 2>/dev/null || echo 0)"
+            # 直接查询 buildroot 是否认识这个包
+            echo "  5) 包符号探测:"
+            grep -A3 "^Package: ${p}\$" tmp/.packageinfo 2>/dev/null | head -6 || echo "     (无记录)"
           fi
         done
         if [ -n "$OPT_MISS" ]; then
