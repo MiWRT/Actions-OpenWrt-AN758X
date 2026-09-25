@@ -41,8 +41,40 @@ files/          可选：自定义 rootfs 文件，会自动拷进源码
 - 默认开启的 `luci-app-airoha-npu` 若拉取失败，脚本会 `::error::` 退出——否则 `defconfig`
   会静默剔除，编出缺状态页的固件还不易察觉。要关就把开关和 config 里的 `=y` 一起改。
 
-中文情况：`luci-app-airoha-npu` 的 po 只有 es，**界面为英文**（上游未提供中文模板）。
-`luci-app-pon-status` 的文案写在 JS 里，已直接用中文。
+中文情况：`luci-app-pon-status` 的文案写在 JS 里，已直接用中文。
+`luci-app-airoha-npu` 上游 `po/` 只有 `es` 和 `templates`，**没有中文** ——
+本仓库自带一份完整中文翻译（77 条），见下节。
+
+### luci-app-airoha-npu 中文包
+
+CI 仓库维护翻译文件：
+
+```
+po/luci-app-airoha-npu/zh_Hans/airoha-npu.po    # 77 条，已全部翻译
+```
+
+`diy-part1.sh` 在 clone 完上游后把它拷进
+`package/custom/luci-app-airoha-npu/po/zh_Hans/`，再配合 config 里的
+
+```
+CONFIG_PACKAGE_luci-app-airoha-npu=y
+CONFIG_PACKAGE_luci-i18n-airoha-npu-zh-cn=y
+```
+
+即可编出中文界面。
+
+⚠️ **文件名必须是 `airoha-npu.po`，不能写成 `luci-app-airoha-npu.po`**：
+
+```makefile
+# luci.mk 的 i18n install 规则
+$(foreach po,$(wildcard ${CURDIR}/po/$(2)/*.po), \
+	po2lmo $(po) $$(1)$(LUCI_LIBRARYDIR)/i18n/$(basename $(notdir $(po))).$(1).lmo;)
+```
+
+lmo 名取自 po 文件主名；而 LuCI 前端按 `LUCI_BASENAME`（`luci-app-` 去掉前缀后
+的 `airoha-npu`）查找 lmo。上游那个 es 用的是 `luci-app-airoha-npu.po`，会生成
+`luci-app-airoha-npu.es.lmo`，前端找不到 —— 属于上游命名问题。
+官方 app 都是 basename 命名（`firewall.po`、`package-manager.po`、`pon.po`）。
 
 
 启用两步：① 脚本里开关改 `true`；② `configs/<机型>.config` 第 19 段把对应

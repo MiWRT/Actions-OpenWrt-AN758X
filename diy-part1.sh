@@ -62,6 +62,17 @@ clone() {  # clone <url> <dir> [branch]
 # 目录必须是 luci-app-airoha-npu，否则 config 里的符号对不上。
 if [ "$ADD_AIROHA_NPU" = "true" ]; then
   clone https://github.com/rchen14b/luci-app-airoha-npu "$PKG_DIR/luci-app-airoha-npu" main
+
+  # 注入简体中文翻译（上游 po/ 只有 es 和 templates，没有 zh_Hans）
+  # 文件名必须是 airoha-npu.po（= LUCI_BASENAME），不能用 luci-app-airoha-npu.po：
+  # luci.mk 的 install 规则是 po2lmo $(po) → $(basename $(notdir $(po))).$(lang).lmo，
+  # 而 LuCI 前端按 LUCI_BASENAME 查找 lmo，故必须是 airoha-npu.zh-cn.lmo。
+  if [ -d "${GITHUB_WORKSPACE}/po/luci-app-airoha-npu/zh_Hans" ]; then
+    mkdir -p "$PKG_DIR/luci-app-airoha-npu/po/zh_Hans"
+    cp "${GITHUB_WORKSPACE}"/po/luci-app-airoha-npu/zh_Hans/*.po \
+       "$PKG_DIR/luci-app-airoha-npu/po/zh_Hans/"
+    echo "✅ 已注入 luci-app-airoha-npu 简体中文翻译"
+  fi
 fi
 
 # --- passwall ---
