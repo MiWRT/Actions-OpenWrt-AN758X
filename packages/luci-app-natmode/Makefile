@@ -2,10 +2,10 @@
 
 include $(TOPDIR)/rules.mk
 
-LUCI_TITLE:=LuCI PON optics status (overview card)
-LUCI_URL:=https://github.com/pbs05/openwrt-pon-userspace
-LUCI_DEPENDS:=+luci-base +luci-mod-status +airoha-ponctl +jsonfilter
-PKG_VERSION:=0.2.0
+LUCI_TITLE:=LuCI NAT mode selector (Full Cone / Restricted / Symmetric)
+LUCI_URL:=https://github.com/pbs05/ponwrt
+LUCI_DEPENDS:=+luci-base +firewall4 +kmod-nft-fullcone +nftables-json
+PKG_VERSION:=0.1.0
 PKG_RELEASE:=1
 
 PKG_LICENSE:=Apache-2.0

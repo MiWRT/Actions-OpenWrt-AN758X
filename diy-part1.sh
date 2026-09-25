@@ -33,7 +33,8 @@ ADD_SMARTDNS=false     # luci-app-smartdns
 
 # ---------------------------------------------------------
 # 本地包：CI 仓库自带的包（不在任何 feed 里），拷进 package/custom
-# 目前有 luci-app-pon-status：把 PON 温度/收发光功率显示在概览页
+# 当前为空 —— PON 光模块已并入「系统」表格（files/www/.../10_system.js），
+# 不再需要独立的 luci-app-pon-status 卡片包。
 # ---------------------------------------------------------
 LOCAL_PKG_DIR="${GITHUB_WORKSPACE}/packages"
 if [ -d "$LOCAL_PKG_DIR" ]; then
@@ -44,6 +45,12 @@ if [ -d "$LOCAL_PKG_DIR" ]; then
     cp -r "$p" "$PKG_DIR/"
     echo "✅ 本地包: $(basename "$p")"
   done
+
+  # git checkout / zip 传输可能丢掉 exec bit，导致 rpcd 无法 exec、
+  # init.d 无法启动。这里统一补回来（另有 uci-defaults 开机兜底）。
+  find "$PKG_DIR" -type f \
+    \( -path "*/usr/sbin/*" -o -path "*/etc/init.d/*" -o -path "*/usr/libexec/*" \) \
+    -exec chmod +x {} \; 2>/dev/null
 fi
 
 clone() {  # clone <url> <dir> [branch]

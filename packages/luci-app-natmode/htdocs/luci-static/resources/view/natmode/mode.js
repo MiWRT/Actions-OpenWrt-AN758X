@@ -1,0 +1,108 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// NAT 类型选择页 —— 网络 → NAT 类型
+//
+// 菜单声明：root/usr/share/luci/menu.d/luci-app-natmode.json
+//   "admin/network/natmode" → action.path "natmode/mode"
+//   → 对应 resources/view/natmode/mode.js（本文件）
+//
+// 三档说明见 /usr/sbin/natmode-apply 顶部注释。
+// 保存后通过 fs.exec 调用 natmode-apply apply 真正生效（ACL 已授权）。
+
+'use strict';
+'require view';
+'require form';
+'require fs';
+'require ui';
+
+function parseStatus(text) {
+	var st = { mode: '?', fullcone: '0', random_rules: '0', module: '?' };
+	(text || '').split('\n').forEach(function(line) {
+		var kv = line.split('=');
+		if (kv.length >= 2)
+			st[kv[0].trim()] = kv.slice(1).join('=').trim();
+	});
+	return st;
+}
+
+function modeLabel(m) {
+	switch (m) {
+		case 'fullcone':   return _('全锥形NAT') + '（NAT1）';
+		case 'restricted': return _('受限型NAT') + '（NAT3）';
+		case 'symmetric':  return _('全对称型NAT') + '（NAT4）';
+		default:           return m;
+	}
+}
+
+function renderStatus(st) {
+	var rows = [
+		_('当前模式'),   modeLabel(st.mode),
+		_('FullCone 开关'), (st.fullcone === '1' ? _('已启用') : _('已关闭')),
+		_('随机端口规则'), (st.random_rules !== '0' ? _('已注入 ') + st.random_rules + _(' 条') : _('无')),
+		_('fullcone 内核模块'), (st.module === 'loaded' ? _('已加载') : _('未加载'))
+	];
+
+	if (st.module !== 'loaded' && st.mode === 'fullcone')
+		rows.push(_('提示'), _('未检测到 nft_fullcone 模块，全锥形可能不生效'));
+
+	var table = E('table', { 'class': 'table' });
+	for (var i = 0; i < rows.length; i += 2) {
+		table.appendChild(E('tr', { 'class': 'tr' }, [
+			E('td', { 'class': 'td left', 'width': '33%' }, [ rows[i] ]),
+			E('td', { 'class': 'td left' }, [ rows[i + 1] || '?' ])
+		]));
+	}
+
+	return E('div', { 'class': 'cbi-section' }, [
+		E('h3', _('当前状态')),
+		table
+	]);
+}
+
+return view.extend({
+	load: function() {
+		return L.resolveDefault(fs.exec_direct('/usr/sbin/natmode-apply', ['status']), '');
+	},
+
+	render: function(statusText) {
+		var st = parseStatus(statusText);
+
+		var m = new form.JSONMap('natmode', _('NAT 类型'),
+			_('选择路由器对内网出向连接的 NAT 行为。数字越小越宽松，P2P / 游戏 / PT 体验越好。'));
+
+		var s = m.section(form.NamedSection, 'main', 'natmode');
+		s.anonymous = false;
+
+		var o = s.option(form.RadioValue, 'mode', _('NAT 类型'));
+		o.orientation = 'vertical';
+		o.value('fullcone',
+			_('全锥形NAT') + '（NAT1）— ' +
+			_('最宽松，端点无关映射 + 端点无关过滤。游戏联机、PT 做种、PCDN 最优。'));
+		o.value('restricted',
+			_('受限型NAT') + '（NAT3）— ' +
+			_('系统默认。端点无关映射 + 地址端口相关过滤，日常上网无影响。'));
+		o.value('symmetric',
+			_('全对称型NAT') + '（NAT4）— ' +
+			_('端口完全随机，映射不可预测，打洞基本不可用。仅用于特殊合规场景。'));
+		o.default = 'fullcone';
+
+		// 保存后真正应用（改 firewall 配置 + 重载 fw4 + 注入随机端口规则）
+		m.handleSaveApply = function(ev) {
+			var self = this;
+			return self.handleSave(ev).then(function() {
+				return fs.exec('/usr/sbin/natmode-apply', ['apply']);
+			}).then(function() {
+				return ui.changes.apply();
+			}).then(function() {
+				ui.addNotification(null,
+					E('p', _('NAT 模式已应用，防火墙已重载。')), 'success');
+				window.setTimeout(function() { window.location.reload(); }, 1500);
+			}).catch(function(e) {
+				ui.addNotification(null,
+					E('p', _('应用失败：') + (e && e.message ? e.message : e)), 'error');
+			});
+		};
+
+		return E('div', {}, [ renderStatus(st), m.render() ]);
+	}
+});
