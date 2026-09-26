@@ -1,13 +1,35 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
 #
-
+# /sbin/tempinfo —— 概览页「温度」行数据源
+#
+# 调用链：
+#   luci-mod-status/.../include/10_system.js
+#     → callTempInfo() → rpcd 方法 luci.getTempInfo → 执行 /sbin/tempinfo
+#     → 输出非空则在「系统」表格插入「温度」行（if (tempinfo.tempinfo)）
+#
+# 为什么需要本文件：
+#   autocore 的 Makefile 只在 ipq% / mediatek% / qualcommax% 这几个 TARGETID
+#   下安装 files/tempinfo，airoha(AN7581/AN7583) 不在列表内，
+#   故 ponwrt 原生固件无 /sbin/tempinfo，概览页没有温度行。
+#   本文件经 files/ 覆盖进 rootfs 补齐。
+#
+# 授权：无需额外 ACL。autocore 装的
+#   /usr/share/rpcd/acl.d/luci-mod-status-autocore.json
+#   无条件授权 luci.getCPUInfo / luci.getTempInfo（受限的只是 tempinfo 脚本本身）。
+#
+# 输出示例：
+#   CPU: 58.7°C, WiFi: 46.0°C 48.0°C, PON: 48.5°C ↑2.41 ↓-21.30 dBm 12.50 mA 3.30 V
 
 IEEE_PATH="/sys/class/ieee80211"
 THERMAL_PATH="/sys/class/thermal"
 
+# 是否在「温度」行附带 PON 光功率 / 偏置电流 / 电压。
+# 1 = 附带（一行显示全套）；0 = 只显示温度。
+# 注意：本仓库同时启用了 luci-app-pon-status 卡片（表格形式，每指标一行，
+# 还含收发光/电流/电压），两者会重复显示同一组数值。
 # 默认设为 0 —— 温度行只给三个温度，光功率交给卡片看，界面更清爽。
-SHOW_PON_OPTICS=1
+SHOW_PON_OPTICS=0
 
 # ---------------------------------------------------------------- 工具
 # 毫摄氏度 → "58.7°C"

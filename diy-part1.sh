@@ -33,7 +33,10 @@ ADD_SMARTDNS=false     # luci-app-smartdns
 
 # ---------------------------------------------------------
 # 本地包：CI 仓库自带的包（不在任何 feed 里），拷进 package/custom
-# 目前有 luci-app-pon-status：把 PON 温度/收发光功率显示在概览页
+# 当前两个：
+#   luci-app-pon-status —— PON 光模块卡片，概览页「系统」下一格
+#                          （文件名 15_pon.js 决定位置）
+#   luci-app-natmode    —— NAT 类型三选一，菜单「网络 → NAT 类型」
 # ---------------------------------------------------------
 LOCAL_PKG_DIR="${GITHUB_WORKSPACE}/packages"
 if [ -d "$LOCAL_PKG_DIR" ]; then
@@ -44,6 +47,12 @@ if [ -d "$LOCAL_PKG_DIR" ]; then
     cp -r "$p" "$PKG_DIR/"
     echo "✅ 本地包: $(basename "$p")"
   done
+
+  # git checkout / zip 传输可能丢掉 exec bit，导致 rpcd 无法 exec、
+  # init.d 无法启动。这里统一补回来（另有 uci-defaults 开机兜底）。
+  find "$PKG_DIR" -type f \
+    \( -path "*/usr/sbin/*" -o -path "*/etc/init.d/*" -o -path "*/usr/libexec/*" \) \
+    -exec chmod +x {} \; 2>/dev/null
 fi
 
 clone() {  # clone <url> <dir> [branch]
@@ -242,7 +251,7 @@ if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
       done
       ./scripts/feeds install -a >/dev/null 2>&1 || true
       echo "  回退后 package/feeds/luci/ :"
-      ls -1 package/feeds/luci/ 2>/dev/null | grep -E "airoha-npu|pon-status" || echo "    ⚠ 仍未出现"
+      ls -1 package/feeds/luci/ 2>/dev/null | grep -E "airoha-npu|pon-status|natmode" || echo "    ⚠ 仍未出现"
     fi
   fi
 else
