@@ -1,0 +1,412 @@
+diff --git a/mt7915/Kconfig b/mt7915/Kconfig
+index 1111111..2222222 100644
+--- a/mt7915/Kconfig
++++ b/mt7915/Kconfig
+@@ -23,3 +23,9 @@
+ 	  This adds support for the built-in WMAC on MT7981 and MT7986 SoC device
+ 	  which has the same feature set as a MT7915, but enables 6E
+ 	  support.
++
++config MT7915_NPU
++	bool "MT7915 (PCIe) NPU support"
++	depends on MT7915E
++	depends on NET_AIROHA_NPU
++	select MT76_NPU
+diff --git a/mt7915/Makefile b/mt7915/Makefile
+index 1111111..2222222 100644
+--- a/mt7915/Makefile
++++ b/mt7915/Makefile
+@@ -9,3 +9,7 @@
+ mt7915e-$(CONFIG_NL80211_TESTMODE) += testmode.o
+ mt7915e-$(CONFIG_MT798X_WMAC) += soc.o
+ mt7915e-$(CONFIG_DEV_COREDUMP) += coredump.o
++
++ifdef CONFIG_MT7915_NPU
++mt7915e-y += npu.o
++endif
+diff --git a/mt7915/npu.c b/mt7915/npu.c
+index 1111111..2222222 100644
+--- a/mt7915/npu.c
++++ b/mt7915/npu.c
+@@ -0,0 +1,170 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * MT7915/MT7916 Airoha NPU offload - vendor-protocol rewrite
++ *
++ * Wire format (recovered from vendor mt7916_ap.ko):
++ *   byte0 = (0x1=SET / 0x3=GET) << 4 | band
++ *   u32@4 = WLAN_FUNC_* (airoha_offload.h enum)
++ *   u32@8 = payload / returned value
++ *
++ * Vendor init order:
++ *   1. SET_WAIT_DRIVER_MODEL        = 2          (once, FIRST)
++ *   2. SET_WAIT_PCIE_ADDR           per band
++ *   3. SET_WAIT_DRAM_BA_NODE_ADDR   512KB buf    (once)
++ *   4. GET (vendor @4=3)            x3 -> ioremap counter window
++ *   5. SET_WAIT_DESC                ring size    per band
++ *   6. GET_WAIT_RXDESC_BASE         per band -> ioremap
++ *
++ * MT7916 has NO dedicated NPU rings/IRQs (unlike MT7996).
++ */
++#include <linux/kernel.h>
++#include <linux/io.h>
++#include <linux/soc/airoha/airoha_offload.h>
++
++#include "mt7915.h"
++
++/* 0=bind only 1=+driver model 2=+pcie/ba/counter 3=+ring size/base */
++#define NPU_DP_STEP 1
++
++int mt7915_npu_hw_init(struct mt7915_dev *dev)
++{
++	struct airoha_npu *npu;
++	int err, band, i;
++
++	npu = rcu_dereference_protected(dev->mt76.mmio.npu,
++					&dev->mt76.mutex);
++	if (!npu)
++		return 0;
++
++#if NPU_DP_STEP >= 1
++	err = mt76_npu_send_msg(npu, 0, WLAN_FUNC_SET_WAIT_DRIVER_MODEL, 2,
++				GFP_KERNEL);
++	if (err)
++		dev_warn(dev->mt76.dev, "NPU set driver model failed %d\n",
++			 err);
++
++	{
++		u32 ver = 0;
++
++		if (!mt76_npu_get_msg(npu, 0, WLAN_FUNC_GET_WAIT_NPU_VERSION,
++				      &ver, GFP_KERNEL))
++			dev_info(dev->mt76.dev, "NPU version: %d.%d\n",
++				 (ver >> 16) & 0xffff, ver & 0xffff);
++	}
++#endif
++
++#if NPU_DP_STEP >= 2
++	for (band = 0; band < 2; band++) {
++		struct mt76_queue *q = &dev->mt76.q_rx[MT7915_RXQ_BAND0 + band];
++		dma_addr_t addr = q->desc_dma;
++
++		dev_info(dev->mt76.dev, "NPU pcie addr band%d: %pad\n",
++			 band, &addr);
++		err = mt76_npu_send_msg(npu, band,
++					WLAN_FUNC_SET_WAIT_PCIE_ADDR,
++					addr, GFP_KERNEL);
++		if (err)
++			dev_warn(dev->mt76.dev,
++				 "NPU set pcie addr failed (band %d) %d\n",
++				 band, err);
++	}
++
++	if (!dev->npu_ba_node)
++		dev->npu_ba_node = dmam_alloc_coherent(dev->mt76.dma_dev,
++						       512 * 1024,
++						       &dev->npu_ba_node_dma,
++						       GFP_KERNEL);
++	if (dev->npu_ba_node) {
++		err = mt76_npu_send_msg(npu, 0,
++					WLAN_FUNC_SET_WAIT_DRAM_BA_NODE_ADDR,
++					dev->npu_ba_node_dma, GFP_KERNEL);
++		if (err)
++			dev_warn(dev->mt76.dev,
++				 "NPU set BA node base failed %d\n", err);
++	}
++
++	/* vendor contract: NPU reads these via RBUS from host memory.
++	 * pkt_buf -> reserved npu-txpkt region (phys, fixed in dts);
++	 * force_to_cpu = 0 (full offload).
++	 */
++	err = mt76_npu_send_msg(npu, 0, WLAN_FUNC_SET_WAIT_PKT_BUF_ADDR,
++				0x8cc00000, GFP_KERNEL);
++	if (err)
++		dev_warn(dev->mt76.dev, "NPU set pkt buf addr failed %d\n", err);
++
++	err = mt76_npu_send_msg(npu, 0, WLAN_FUNC_SET_WAIT_IS_FORCE_TO_CPU,
++				0, GFP_KERNEL);
++	if (err)
++		dev_warn(dev->mt76.dev, "NPU set force_to_cpu failed %d\n", err);
++
++	for (i = 0; i < 3; i++) {
++		u32 base = 0;
++
++		err = mt76_npu_get_msg(npu, i, WLAN_FUNC_GET_WAIT_DBG_COUNTER,
++				       &base, GFP_KERNEL);
++		if (!err && base) {
++			dev->npu_cnt_base[i] = ioremap(base, 4);
++			dev_dbg(dev->mt76.dev, "NPU cnt%d base: %08x\n",
++				i, base);
++		}
++	}
++#endif
++
++#if NPU_DP_STEP >= 3
++	for (band = 0; band < 2; band++) {
++		u32 base = 0;
++
++		err = mt76_npu_send_msg(npu, band, WLAN_FUNC_SET_WAIT_DESC,
++					MT7915_RX_RING_SIZE, GFP_KERNEL);
++		if (err)
++			dev_warn(dev->mt76.dev,
++				 "NPU set desc failed (band %d) %d\n",
++				 band, err);
++
++		err = mt76_npu_get_msg(npu, band,
++				       WLAN_FUNC_GET_WAIT_RXDESC_BASE,
++				       &base, GFP_KERNEL);
++		if (!err && base) {
++			dev->npu_rx_ring_base[band] = ioremap(base, 4);
++			dev_info(dev->mt76.dev, "NPU rx ring%d base: %08x\n",
++				 band, base);
++		} else {
++			dev_warn(dev->mt76.dev, "NPU get rxdesc base failed (band %d) err=%d base=%08x\n",
++				 band, err, base);
++		}
++	}
++#endif
++
++	return 0;
++}
++
++int mt7915_npu_hw_stop(struct mt7915_dev *dev)
++{
++	return 0;
++}
++
++void mt7915_npu_wcid_sync(struct mt7915_dev *dev, u8 wcid_idx, u8 phy_idx)
++{
++	struct airoha_npu *npu;
++
++	dev_info(dev->mt76.dev, "NPU wcid_sync entry: band=%d wcid=%d\n",
++		 phy_idx & 0xf, wcid_idx);
++
++	npu = rcu_dereference_protected(dev->mt76.mmio.npu,
++					&dev->mt76.mutex);
++	if (!npu)
++		return;
++
++	/* vendor MacTable insert/delete 同一条消息:
++	 * byte0 = band|0x10, u32@4 = 6, u32@8 = wcid
++	 */
++	dev_info(dev->mt76.dev, "NPU sta sync: band=%d wcid=%d\n",
++		 phy_idx & 0xf, wcid_idx);
++	{
++		int ret = mt76_npu_send_msg(npu, phy_idx & 0xf, 6, wcid_idx,
++					    GFP_KERNEL);
++
++		dev_info(dev->mt76.dev, "NPU sta sync: band=%d wcid=%d ret=%d\n",
++			 phy_idx & 0xf, wcid_idx, ret);
++	}
++}
+diff --git a/mt7915/mt7915.h b/mt7915/mt7915.h
+index 1111111..2222222 100644
+--- a/mt7915/mt7915.h
++++ b/mt7915/mt7915.h
+@@ -340,6 +340,12 @@
+ 	struct reset_control *rstc;
+ 	void __iomem *dcm;
+ 	void __iomem *sku;
++
++	/* Airoha NPU offload (vendor protocol) */
++	void			*npu_ba_node;
++	dma_addr_t		npu_ba_node_dma;
++	void __iomem		*npu_cnt_base[3];
++	void __iomem		*npu_rx_ring_base[2];
+ };
+ 
+ enum {
+@@ -671,3 +677,7 @@
+ 			 bool pci, int *irq);
+ 
+ #endif
++
++int mt7915_npu_hw_init(struct mt7915_dev *dev);
++int mt7915_npu_hw_stop(struct mt7915_dev *dev);
++void mt7915_npu_wcid_sync(struct mt7915_dev *dev, u8 wcid_idx, u8 phy_idx);
+diff --git a/mt7915/pci.c b/mt7915/pci.c
+index 1111111..2222222 100644
+--- a/mt7915/pci.c
++++ b/mt7915/pci.c
+@@ -16,6 +16,9 @@
+ static DEFINE_SPINLOCK(hif_lock);
+ static u32 hif_idx;
+ 
++static bool mt7915_npu = true;
++module_param(mt7915_npu, bool, 0644);
++
+ static const struct pci_device_id mt7915_pci_device_table[] = {
+ 	{ PCI_DEVICE(PCI_VENDOR_ID_MEDIATEK, 0x7915) },
+ 	{ PCI_DEVICE(PCI_VENDOR_ID_MEDIATEK, 0x7906) },
+@@ -130,6 +133,9 @@
+ 
+ 	dev = mt7915_mmio_probe(&pdev->dev, pcim_iomap_table(pdev)[0],
+ 				id->device);
++	if (mt7915_npu)
++		mt76_npu_init(&dev->mt76, pci_resource_start(pdev, 0),
++			      id->device == 0x7906 ? 2 : 3);
+ 	if (IS_ERR(dev))
+ 		return PTR_ERR(dev);
+ 
+diff --git a/mt7915/init.c b/mt7915/init.c
+index 1111111..2222222 100644
+--- a/mt7915/init.c
++++ b/mt7915/init.c
+@@ -1320,6 +1320,10 @@
+ 	dev->mt76.test_ops = &mt7915_testmode_ops;
+ #endif
+ 
++	ret = mt7915_npu_hw_init(dev);
++	if (ret)
++		return ret;
++
+ 	ret = mt76_register_device(&dev->mt76, true, mt76_rates,
+ 				   ARRAY_SIZE(mt76_rates));
+ 	if (ret)
+diff --git a/mt7915/mac.c b/mt7915/mac.c
+index 1111111..2222222 100644
+--- a/mt7915/mac.c
++++ b/mt7915/mac.c
+@@ -527,6 +527,8 @@
+ 		status->flag |= RX_FLAG_8023;
+ 		mt7915_wed_check_ppe(dev, &dev->mt76.q_rx[q], msta, skb,
+ 				     *info);
++		if (!is_mt7915(&dev->mt76))
++			mt76_npu_check_ppe(&dev->mt76, skb, *info);
+ 	}
+ 
+ 	if (rxv && mode >= MT_PHY_TYPE_HE_SU && !(status->flag & RX_FLAG_8023))
+diff --git a/mt7915/main.c b/mt7915/main.c
+index 1111111..2222222 100644
+--- a/mt7915/main.c
++++ b/mt7915/main.c
+@@ -762,6 +762,7 @@
+ int mt7915_mac_sta_add(struct mt76_dev *mdev, struct ieee80211_vif *vif,
+ 		       struct ieee80211_sta *sta)
+ {
++
+ 	struct mt7915_dev *dev = container_of(mdev, struct mt7915_dev, mt76);
+ 	struct mt7915_sta *msta = (struct mt7915_sta *)sta->drv_priv;
+ 	struct mt7915_vif *mvif = (struct mt7915_vif *)vif->drv_priv;
+@@ -802,6 +803,14 @@
+ 						  IEEE80211_DEFAULT_AIRTIME_WEIGHT);
+ 	}
+ 
++	{
++		struct mt7915_vif *mvif = (struct mt7915_vif *)vif->drv_priv;
++		struct mt7915_sta *msta = (struct mt7915_sta *)sta->drv_priv;
++
++		mt7915_npu_wcid_sync(container_of(mdev, struct mt7915_dev, mt76),
++				     msta->wcid.idx, mvif->phy->mt76->band_idx);
++	}
++
+ 	return 0;
+ }
+ 
+@@ -907,6 +916,7 @@
+ void mt7915_mac_sta_remove(struct mt76_dev *mdev, struct ieee80211_vif *vif,
+ 			   struct ieee80211_sta *sta)
+ {
++
+ 	struct mt7915_dev *dev = container_of(mdev, struct mt7915_dev, mt76);
+ 	struct mt7915_sta *msta = (struct mt7915_sta *)sta->drv_priv;
+ 
+@@ -919,6 +929,13 @@
+ 	if (!list_empty(&msta->rc_list))
+ 		list_del_init(&msta->rc_list);
+ 	spin_unlock_bh(&mdev->sta_poll_lock);
++	{
++		struct mt7915_vif *mvif = (struct mt7915_vif *)vif->drv_priv;
++		struct mt7915_sta *msta = (struct mt7915_sta *)sta->drv_priv;
++
++		mt7915_npu_wcid_sync(container_of(mdev, struct mt7915_dev, mt76),
++				     msta->wcid.idx, mvif->phy->mt76->band_idx);
++	}
+ }
+ 
+ static void mt7915_tx(struct ieee80211_hw *hw,
+@@ -1852,6 +1869,23 @@
+ 				     MT7915_WATCHDOG_TIME);
+ }
+ 
++#if defined(CONFIG_NET_MEDIATEK_SOC_WED) || defined(CONFIG_MT7915_NPU)
++static int
++mt7915_net_setup_tc(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
++		    struct net_device *netdev, enum tc_setup_type type,
++		    void *type_data)
++{
++#ifdef CONFIG_NET_MEDIATEK_SOC_WED
++	struct mt7915_dev *dev = mt7915_hw_dev(hw);
++
++	if (mtk_wed_device_active(&dev->mt76.mmio.wed))
++		return mt76_wed_net_setup_tc(hw, vif, netdev, type,
++					     type_data);
++#endif
++	return mt76_npu_net_setup_tc(hw, vif, netdev, type, type_data);
++}
++#endif
++
+ const struct ieee80211_ops mt7915_ops = {
+ 	.add_chanctx = ieee80211_emulate_add_chanctx,
+ 	.remove_chanctx = ieee80211_emulate_remove_chanctx,
+@@ -1909,7 +1943,7 @@
+ 	.set_radar_background = mt7915_set_radar_background,
+ #ifdef CONFIG_NET_MEDIATEK_SOC_WED
+ 	.net_fill_forward_path = mt7915_net_fill_forward_path,
+-	.net_setup_tc = mt76_wed_net_setup_tc,
++	.net_setup_tc = mt7915_net_setup_tc,
+ #endif
+ 	.reconfig_complete = mt7915_reconfig_complete,
+ };
+diff --git a/dma.c b/dma.c
+index 1111111..2222222 100644
+--- a/dma.c
++++ b/dma.c
+@@ -738,7 +738,7 @@
+ 	if (ret < 0)
+ 		goto unmap;
+ 
+-	if (mt76_npu_device_active(dev))
++	if (mt76_npu_device_active(dev) && !is_mt7915(dev))
+ 		return mt76_npu_dma_add_buf(phy, q, skb, &tx_info.buf[1], txwi);
+ 
+ 	return mt76_dma_add_buf(dev, q, tx_info.buf, tx_info.nbuf,
+diff --git a/npu.c b/npu.c
+index 1111111..2222222 100644
+--- a/npu.c
++++ b/npu.c
+@@ -471,12 +471,14 @@
+ 	if (err)
+ 		goto error_ppe_put;
+ 
+-	dev->dma_dev = npu->dev;
+ 	dev->mmio.phy_addr = phy_addr;
+ 	dev->mmio.npu_type = type;
+-	/* NPU offloading requires HW-RRO for RX packet reordering. */
+-	dev->hwrro_mode = is_mt7996(dev) ? MT76_HWRRO_V3 : MT76_HWRRO_V3_1;
+-	dev->rx_token_size = 32768;
++
++	if (is_mt7996(dev)) {
++		dev->dma_dev = npu->dev;
++		dev->hwrro_mode = MT76_HWRRO_V3;
++		dev->rx_token_size = 32768;
++	}
+ 
+ 	rcu_assign_pointer(dev->mmio.npu, npu);
+ 	rcu_assign_pointer(dev->mmio.ppe_dev, ppe_dev);
+diff --git a/mt76.h b/mt76.h
+index 1111111..2222222 100644
+--- a/mt76.h
++++ b/mt76.h
+@@ -1759,7 +1759,10 @@
+ 
+ static inline bool mt76_npu_device_active(struct mt76_dev *dev)
+ {
+-	return mt76_is_mmio(dev) && !!rcu_access_pointer(dev->mmio.npu);
++	/* dedicated NPU rings/RRO datapath is MT7996-only; 7915/7916
++	 * use classic shared rings with the NPU as co-processor
++	 */
++	return false;
+ }
+ 
+ static inline bool mt76_ppe_device_active(struct mt76_dev *dev)

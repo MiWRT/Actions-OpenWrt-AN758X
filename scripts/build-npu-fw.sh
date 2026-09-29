@@ -103,6 +103,23 @@ GITREV="$(git -C "$SRC" rev-parse --short HEAD)"
 echo ">>> ClankerNPU @ $GITREV  (ref=$CLANKER_REF, ${SOC}_${WIFI})"
 
 # ------------------------------------------------------------------
+# 2.5) 应用自定义补丁（patches/clanker/）
+#      固件源码是按 ref 拉的只读快照，改它没意义，要改就靠补丁。
+#      目录不存在或为空则自动跳过。
+# ------------------------------------------------------------------
+CLANKER_PATCH_DIR="${CLANKER_PATCH_DIR:-}"
+if [ -n "$CLANKER_PATCH_DIR" ] && [ -d "$CLANKER_PATCH_DIR" ]; then
+  AP="$(dirname "$(readlink -f "$0")")/apply-patches.sh"
+  if [ ! -f "$AP" ]; then
+    echo "::error::找不到 apply-patches.sh: $AP"
+    exit 1
+  fi
+  PATCH_STRICT="${PATCH_STRICT:-true}" bash "$AP" "$SRC" "$CLANKER_PATCH_DIR" "clanker" || exit 1
+else
+  echo ">>> 未指定 ClankerNPU 补丁目录，跳过"
+fi
+
+# ------------------------------------------------------------------
 # 3) 编译
 # ------------------------------------------------------------------
 echo ">>> make SOC=$SOC WIFI=$WIFI CLANKER=$CLANKER"
