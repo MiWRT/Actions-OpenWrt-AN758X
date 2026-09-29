@@ -27,6 +27,15 @@ env:
   NPU_FW_PREFIX: ${{ github.event.inputs.npu_fw_prefix || '' }}
   NPU_WLAN_MEM: ${{ github.event.inputs.npu_wlan_mem || 'true' }}
   NPU_SRC_REF: ${{ github.event.inputs.npu_src_ref || 'main' }}
+  # ---- 自定义补丁 ----
+  APPLY_PATCHES: ${{ github.event.inputs.apply_patches || 'true' }}
+  PATCH_STRICT: ${{ github.event.inputs.patch_strict || 'true' }}
+  # ---- mt76 无线驱动 ----
+  # repo     = 用仓库 mt76/ 覆盖 package/kernel/mt76（启用 WiFi NPU 卸载）
+  # upstream = 不动，用 ponwrt 自带版本（不含 NPU vendor 改写）
+  MT76_SRC: ${{ github.event.inputs.mt76 || 'repo' }}
+  # ---- 源码下载加速（自建 runner / 国内网络用）----
+  GH_PROXY: ${{ github.event.inputs.gh_proxy || 'false' }}
 
 on:
   repository_dispatch:
@@ -133,6 +142,38 @@ on:
         description: 'ClankerNPU 源码 ref (默认 main=跟上游最新；也可填 commit sha / tag 钉死版本)'
         required: false
         default: 'main'
+      apply_patches:
+        description: '应用 patches/ 下的自定义补丁 (放到对应子目录: ponwrt / kernel / clanker)'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      patch_strict:
+        description: '补丁打不上时立刻失败 (false=仅警告继续编译)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      mt76:
+        description: 'mt76 无线驱动: repo=用仓库 mt76/(含 NPU 卸载, 推荐); upstream=用 ponwrt 自带'
+        required: false
+        default: 'repo'
+        type: choice
+        options:
+          - repo
+          - upstream
+      gh_proxy:
+        description: 'git clone 走 gh-proxy.com 镜像加速 (GitHub 官方 runner 无需开启)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
       upload_release:
         description: '固件发布到 Release（false 则只传 Artifact）'
         required: false
@@ -273,7 +314,12 @@ jobs:
       run: |
         cd "$BUILD_ROOT"
         df -hT "$PWD"
-        git clone "$REPO_URL" -b "$REPO_BRANCH" --single-branch --depth=1 openwrt
+        CLONE_URL="$REPO_URL"
+        if [ "$GH_PROXY" = "true" ]; then
+          CLONE_URL="https://gh-proxy.com/${REPO_URL}"
+          echo ">>> 使用镜像加速: $CLONE_URL"
+        fi
+        git clone "$CLONE_URL" -b "$REPO_BRANCH" --single-branch --depth=1 openwrt
         ln -sf "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/openwrt"
         cd openwrt && echo "commit: $(git rev-parse --short HEAD)"
 
@@ -308,12 +354,57 @@ jobs:
         ./scripts/feeds install -a
 
     # =========================================================
+    # 4.5 应用自定义补丁 —— patches/ 下三个子目录，各自对应一个目标
+    #     ponwrt/  直接打到源码树（DTS / package / 脚本等）
+    #     kernel/  复制到 target/linux/airoha/patches-*/，由 quilt 在编内核前应用
+    #     目录不存在或为空则自动跳过，不影响正常构建
+    # =========================================================
+    - name: Apply custom patches
+      if: env.APPLY_PATCHES == 'true'
+      run: |
+        set -uo pipefail
+        cd "$BUILD_ROOT/openwrt"
+        REPO_DIR="$GITHUB_WORKSPACE"
+        chmod +x "$REPO_DIR/scripts/"*.sh
+
+        echo "===== patches/ 目录内容 ====="
+        find "$REPO_DIR/patches" -type f 2>/dev/null | sed "s|$REPO_DIR/||" || echo "(空)"
+
+        # 1) 源码树补丁（立即生效）
+        PATCH_STRICT="$PATCH_STRICT" \
+          bash "$REPO_DIR/scripts/apply-patches.sh" . "$REPO_DIR/patches/ponwrt" "ponwrt"
+
+        # 2) 内核补丁（复制进 target patches 目录，编译内核时才应用）
+        bash "$REPO_DIR/scripts/install-kernel-patches.sh" . "$REPO_DIR/patches/kernel" \
+          || { [ "$PATCH_STRICT" = "true" ] && exit 1; }
+
+    # =========================================================
+    # 4.6 安装 mt76 无线驱动（AN758x 的 WiFi NPU 卸载）
+    #
+    #   仓库 mt76/ = Makefile（给 an7581 / an7583 开 CONFIG_MT76_NPU /
+    #   CONFIG_MT7915_NPU）+ 3 个补丁，其中 113 是 NPU vendor 改写。
+    #   ponwrt 自带的 package/kernel/mt76 只有 100/110 两个补丁，
+    #   没有 NPU 相关改动 → 想让 WiFi 走 NPU 卸载就必须换这个包。
+    #
+    #   选 upstream 则整个步骤跳过（编译出的 WiFi 不卸载到 NPU）。
+    # =========================================================
+    - name: Install mt76 wireless driver
+      if: env.MT76_SRC == 'repo'
+      run: |
+        set -uo pipefail
+        cd "$BUILD_ROOT/openwrt"
+        chmod +x "$GITHUB_WORKSPACE/scripts/"*.sh
+        bash "$GITHUB_WORKSPACE/scripts/install-mt76.sh" . "$GITHUB_WORKSPACE/mt76" "$PATCH_STRICT"
+
+    # =========================================================
     # 5. diy-part1.sh —— 拉取可选插件
     # =========================================================
     - name: Pull optional plugins (diy-part1.sh)
       run: |
         cd "$BUILD_ROOT/openwrt"
         chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
+        # GH_PROXY 来自 workflow 级 env，会自动注入每个 step 的 shell 环境，
+        # diy-part1.sh 里的 clone() 读它决定要不要走 gh-proxy.com 镜像
         "$GITHUB_WORKSPACE/$DIY_P1_SH"
 
     # =========================================================
@@ -323,9 +414,10 @@ jobs:
     #
     #     ⚠️ 为什么不做成独立 ipk：airoha-en7581-npu-firmware 是 an7581
     #     subtarget 的 DEFAULT_PACKAGE（target/linux/airoha/an7581/target.mk），
-    #     make defconfig 会把它强制拉回 =y，禁不掉。两个包装同名文件
-    #     要么冲突要么靠安装顺序碰运气，不如直接走 files/ 覆盖 ——
+    #     两个包装同名文件要么冲突要么靠安装顺序碰运气，不如走 files/ 覆盖 ——
     #     files/ 是在 ipk 安装完之后才铺进 rootfs 的，必然生效。
+    #     另外 .config 里置 n 也有效（package-metadata.pl 生成的是 default 不是
+    #     select），step 7.5 双管齐下。
     # =========================================================
     - name: Build NPU firmware (ClankerNPU)
       if: env.NPU_FW == 'clanker' && env.BUILD_SCOPE != 'toolchain-only'
@@ -336,8 +428,15 @@ jobs:
         SOC_UP=$(echo "$SOC" | tr 'a-z' 'A-Z')
         chmod +x "$REPO_DIR/scripts/"*.sh
 
+        # APPLY_PATCHES=false 时不传补丁目录，固件按上游原样编译
+        CLANKER_PATCH_DIR=""
+        if [ "$APPLY_PATCHES" = "true" ] && [ -d "$REPO_DIR/patches/clanker" ]; then
+          CLANKER_PATCH_DIR="$REPO_DIR/patches/clanker"
+        fi
+
         SOC="$SOC_UP" WIFI="$NPU_WIFI" CLANKER="$NPU_CLANKER" \
         CLANKER_REF="$NPU_SRC_REF" FW_PREFIX="$NPU_FW_PREFIX" \
+        CLANKER_PATCH_DIR="$CLANKER_PATCH_DIR" PATCH_STRICT="$PATCH_STRICT" \
         OUT_DIR="$REPO_DIR/files/lib/firmware/airoha" \
         WORK="$REPO_DIR/.clanker-build" \
           bash "$REPO_DIR/scripts/build-npu-fw.sh"
@@ -429,7 +528,7 @@ jobs:
         disable_stock() {
           for p in $STOCK_PKGS; do
             sed -i "s|^CONFIG_PACKAGE_${p}=[ym]|# CONFIG_PACKAGE_${p} is not set|" .config
-          # sed -i "s|^CONFIG_PACKAGE_${p}=[ym]|CONFIG_PACKAGE_${p}=n|" .config
+            # sed -i "s|^CONFIG_PACKAGE_${p}=[ym]|CONFIG_PACKAGE_${p}=n|" .config
           done
         }
 
@@ -588,6 +687,25 @@ jobs:
         echo "缓存 Key  : $CACHE_KEY"
         echo "缓存前缀  : $CACHE_PREFIX"
         echo "========================================"
+
+    # =========================================================
+    # 9.2 WiFi NPU 卸载自检（defconfig 之后、编译之前）
+    #
+    #     "补丁复制进 package/kernel/mt76/patches/" 不等于 "编出来会生效"：
+    #       ① NPU 宏由 Makefile 按 subtarget 判断（an7581 / an7583）
+    #       ② 113 补丁的 Kconfig 依赖内核 NET_AIROHA_NPU
+    #       ③ DTS 必须带 npu-wlan 保留内存区
+    #       ④ NPU 固件得有着落（stock 包 或 files/ 覆盖）
+    #     任一环断掉，Wi-Fi 都会悄悄退回纯软件转发，日志里几乎看不出来。
+    #     这里只打 warning 不阻断 —— 把"没生效"变成一条可见的提示。
+    # =========================================================
+    - name: Verify WiFi NPU offload
+      run: |
+        set -uo pipefail
+        cd "$BUILD_ROOT/openwrt"
+        chmod +x "$GITHUB_WORKSPACE/scripts/"*.sh
+        SOC="$SOC" PROFILE="$PROFILE" NPU_FW="$NPU_FW" NPU_WLAN_MEM="$NPU_WLAN_MEM" \
+          bash "$GITHUB_WORKSPACE/scripts/verify-wifi-npu.sh" .
 
     # =========================================================
     # 9.5 下载工具链源码 —— 必须在编工具链之前
@@ -933,6 +1051,8 @@ jobs:
           echo "| 提交 | \`$(cd "$BUILD_ROOT"/openwrt && git rev-parse --short HEAD)\` |"
           echo "| 编译时间 | $(date '+%Y-%m-%d %H:%M:%S') (Shanghai) |"
           echo "| NPU 固件 | \`${NPU_FW}\`$( [ "$NPU_FW" = "clanker" ] && echo " (${NPU_WIFI}, ClankerNPU)" ) |"
+          echo "| mt76 无线驱动 | \`${MT76_SRC}\`$([ "$MT76_SRC" = "repo" ] && echo "（含 113 NPU vendor 改写）" || echo "（上游版，无 NPU 卸载）") |"
+          echo "| WiFi NPU 内存区 | \`${NPU_WLAN_MEM}\` |"
           echo ""
 
           # NPU 固件用 ClankerNPU 现编时，把版本/变体/校验写进 Release 便于回溯
