@@ -9,17 +9,36 @@
 .github/workflows/build-ponwrt.yml     主构建流程（机型可选 / 释放空间 / 工具链缓冲）
 .github/workflows/cache-keepalive.yml  每 5 天 touch 缓存，防止被回收
 diy-part1.sh    拉取可选插件到 package/custom（passwall/openclash/mosdns/lucky/tailscale 等，默认全关）
-diy-part2.sh    把默认时区改成中国（Asia/Shanghai, CST-8）
+diy-part2.sh    默认值定制：① 时区改中国（Asia/Shanghai, CST-8）
+                ② 5G WiFi：国家码 CN / 信道 auto / 频宽 160MHz
 configs/        每机型一份精简 diffconfig（约 440 行，需 make defconfig 展开）
-files/          自定义 rootfs 文件，会自动拷进源码（sbin/tempinfo + 两个 uci-defaults）
-packages/       CI 仓库自带的本地包（不走 clone），由 diy-part1.sh 拷进 package/custom
-                ├─ luci-app-pon-status  PON 光模块卡片（概览页「系统」下一格）
-                └─ luci-app-natmode     NAT 类型三选一（网络 → NAT 类型）
+files/          自定义 rootfs 文件，会自动拷进源码（sbin/tempinfo + 两个 uci-defaults））
+packages/npu-clanker-template/   可选插件包的 Makefile 模板（占位符 @PKG_NAME@ 等）
+scripts/        NPU 固件脚本：
+                  build-npu-fw.sh         现编 ClankerNPU（拉源码 + riscv 工具链 + 体积自检）
+                  gen-npu-fw-package.sh   把编出的镜像包成「可选插件包」
+                  strip-default-npu-fw.sh 把 stock 固件从 target 的 DEFAULT_PACKAGES 里摘掉
+                  apply-npu-dts.sh        给机型 DTS 补 WiFi 卸载保留内存区 / firmware-name
 ```
 
 ## diy 脚本
 
 只有两个，职责单一：
+
+### 索引判据：看 `tmp/.packageinfo`，不看 `package/feeds/custom`
+
+`diy-part1.sh` 把包放进 `package/custom/` 就够了 —— `prepare-tmpinfo` 直接扫
+`package/` 目录树（`find -L package -maxdepth 5 -name Makefile`），深度 3 的
+`package/custom/<pkg>/Makefile` 必然被扫到，**不需要注册 feed**。
+
+日志里出现 `⚠ package/feeds/custom 不存在` 是**正常现象**，不是索引失败：
+`scripts/feeds` 的 `install_src()` 发现包已经 installed（就是上面那份扫出来的）
+就直接返回，不会建符号链接。旧版本往 `feeds/luci/applications` 拷贝的兜底也已删除
+（luci 是 git feed，拷进去下次 `feeds update -a` 就会被冲掉）。
+
+> 强制重建索引时必须连 `tmp/info/.scan-*.stamp` 一起删。`prepare-tmpinfo` 有
+> `scan_unchanged` 优化，stamp 还在且没有更新的 Makefile 时会跳过扫描，
+> 于是 `tmp/.packageinfo` 被删了却没人重建。
 
 ### diy-part1.sh —— 拉插件
 
@@ -36,20 +55,8 @@ packages/       CI 仓库自带的本地包（不走 clone），由 diy-part1.sh
 | `luci-app-pon-status` | PON 光模块卡片：**温度 / 收光 / 发光 / 偏置电流 / 供电电压**，表格形式显示在概览页「系统」下一格 |
 | `luci-app-natmode` | NAT 类型三选一：**全锥形 NAT1 / 受限型 NAT3 / 全对称型 NAT4**，菜单「网络 → NAT 类型」 |
 
-> **已移除 `luci-app-temp-status`**：温度统一由 autocore 的 `/sbin/tempinfo`
-> 提供（见下节），功能重叠，无需再装该插件。
-
 其余默认关闭：`ADD_PASSWALL` / `ADD_OPENCLASH` / `ADD_MOSDNS` / `ADD_LUCKY` /
 `ADD_TAILSCALE` / `ADD_OPENLIST` / `ADD_SMARTDNS`。
-
-⚠️ 两点：
-- 拉取目录名必须等于包名（`luci.mk: PKG_NAME ?= $(notdir ${CURDIR})`），
-  改目录名会导致 config 里的符号对不上。
-- 默认开启的 `luci-app-airoha-npu` 若拉取失败，脚本会 `::error::` 退出——否则 `defconfig`
-  会静默剔除，编出缺状态页的固件还不易察觉。要关就把开关和 config 里的 `=y` 一起改。
-
-中文情况：`luci-app-pon-status` 的文案写在 JS 里，已直接用中文。
-`luci-app-airoha-npu` 用 luanmuc 版，**自带完整中文翻译**，见下节。
 
 ### luci-app-airoha-npu 的源与中文
 
@@ -61,202 +68,41 @@ packages/       CI 仓库自带的本地包（不走 clone），由 diy-part1.sh
 | 仓库结构 | ⚠ 根目录 + 同名子目录各一份，feed 索引会中断 | ✅ 单层，正常 |
 | luci.mk 路径 | 需 feeds 在固定位置 | ✅ 已修 |
 
-config 里两个符号都开：
+## 5G WiFi 默认值（国家码 CN / 信道 auto / 160MHz）
 
-```
-CONFIG_PACKAGE_luci-app-airoha-npu=y
-CONFIG_PACKAGE_luci-i18n-airoha-npu-zh-cn=y
-```
+由 `diy-part2.sh` 第 4 段实现，落在
+`files/etc/uci-defaults/96-wifi-5g-cn`（**首启执行**）。
 
-#### po 文件名必须改名（diy-part1.sh 已自动处理）
+### 默认值
 
-`luci.mk` 的 i18n install 规则：
+| 选项 | 值 |
+|---|---|
+| `country` | `CN`（中国） |
+| `country_ie` | `1`（beacon 中广播国家码） |
+| `channel` | `auto`（自动选信道 / ACS） |
+| `htmode` | `HE160`（160MHz，WiFi 6）；不支持则回落 `HE80` |
 
-```makefile
-$(foreach po,$(wildcard ${CURDIR}/po/$(2)/*.po), \
-	po2lmo $(po) $$(1)$(LUCI_LIBRARYDIR)/i18n/$(basename $(notdir $(po))).$(1).lmo;)
-```
+编辑 `diy-part2.sh` 顶部的编译期常量（会被注入 uci-defaults 脚本）：
 
-lmo 名取自 **po 文件主名**；而运行时按
-`LUCI_BASENAME = $(patsubst luci-app-%,%,luci-app-airoha-npu)` = **`airoha-npu`** 查找。
-
-上游两份 po 都叫 `luci-app-airoha-npu.po` → 生成 `luci-app-airoha-npu.zh-cn.lmo`
-→ 前端要的是 `airoha-npu.zh-cn.lmo` → **找不到，中文不生效**。
-
-官方 app 都是 basename 命名：`firewall.po`、`package-manager.po`、`pon.po`。
-故 diy-part1.sh 在 clone 后把 `po/zh_Hans/*.po` 改名为 `airoha-npu.po`（幂等）。
-
-## NAT 类型选择器（网络 → NAT 类型）
-
-`packages/luci-app-natmode`（本地包）提供一个**三选一**界面，位置：
-**网络 → NAT 类型**。
-
-```
-全锥形NAT（NAT1）      ← 推荐：游戏联机 / PT 做种 / PCDN
-受限型NAT（NAT3）      ← 系统默认
-全对称型NAT（NAT4）    ← 最严格，仅特殊合规场景
+```bash
+WIFI_5G_COUNTRY="${WIFI_5G_COUNTRY:-CN}"
+WIFI_5G_CHANNEL="${WIFI_5G_CHANNEL:-auto}"
+WIFI_5G_HTMODE="${WIFI_5G_HTMODE:-HE160}"
+WIFI_5G_FALLBACK="${WIFI_5G_FALLBACK:-HE80}"
 ```
 
-### 三档的实现原理
+也支持 workflow 层通过环境变量覆盖。
 
-| 档位 | 实现 | 说明 |
-|------|------|------|
-| **全锥形 NAT1** | `firewall.@defaults[0].fullcone='1'` | fw4 生成 `fullcone` 表达式，内核 `kmod-nft-fullcone` 按转换后 3-tuple 建第二张哈希表，实现端点无关映射 + 端点无关过滤 |
-| **受限型 NAT3** | `fullcone='0'`（netfilter 默认）| Linux `masquerade` 会尽量复用同一公网端口（EIM），入站只放行内网主动联系过的 IP:端口 → RFC 3489 的 Port Restricted Cone |
-| **全对称型 NAT4** | `fullcone='0'` + 在各 `srcnat_*` 链首插入 `masquerade fully-random` | 每条新连接完全随机选源端口，映射不可预测，打洞基本失败 |
+### 注意事项
 
-⚠️ 两点技术限制，如实说明：
-
-1. **标准 netfilter 做不出精确的 NAT2**（仅地址受限、端口不受限）。
-   它的过滤行为是「地址+端口都受限」，即 NAT3。所以本插件的「受限型」档位
-   实测就是 NAT3，不是 NAT2。
-2. **对称型用的是随机端口**，不是 RFC 定义的「按目的地独立映射」。
-   两者对 P2P / STUN 的效果等同（都不可预测、都无法打洞），但严格语义不同。
-
-### 文件结构
-
-```
-packages/luci-app-natmode/
-├── Makefile
-├── root/etc/config/natmode                        # UCI: natmode.main.mode
-├── root/etc/init.d/natmode                        # START=25（晚于 firewall 的 19）
-├── root/usr/sbin/natmode-apply                    # apply / status
-├── root/usr/share/rpcd/acl.d/luci-app-natmode.json
-├── root/usr/share/luci/menu.d/luci-app-natmode.json
-└── htdocs/luci-static/resources/view/natmode/mode.js
-```
-
-### 与「网络 → 防火墙」选项的关系（重点）
-
-**防火墙页面里那个「启用 FullCone NAT」和本插件是同一个 UCI 键。**
-
-`luci-app-firewall` 的 `zones.js`：
-
-```js
-if (L.hasSystemFeature('fullcone')) {
-    o = s.option(form.Flag, 'fullcone', _('Enable FullCone NAT'));
-    ...
-}
-```
-
-写的正是 `firewall.@defaults[0].fullcone`，与本插件操作的完全一致。
-
-因此：
-
-| 场景 | 结果 |
-|------|------|
-| 在本插件页切换 | 写 `natmode.main.mode` + `firewall` 的 fullcone，两边都同步 ✅ |
-| 在防火墙页直接改 FullCone 开关 | **只改 `firewall`，`natmode.main.mode` 不变** → 本页显示与实际不符 ⚠️ |
-
-针对第二种情况，`natmode-apply status` 会从实际 UCI / nftables 状态**反推生效模式**
-（`effective` 字段），页面在两者不一致时给出黄色告警并提示重新保存同步。
-所以不会出现"静默不一致"——差异一定会被看见。
-
-> 补充：`L.hasSystemFeature('fullcone')` 的判定（luci-base 的 rpcd ucode 插件）是
-> `access('/sys/module/nft_fullcone/refcnt')`，即**模块加载后**防火墙页才显示该选项。
-> 存在"未开 fullcone → 模块没加载 → 选项不显示"的鸡生蛋情况；
-> 本插件不依赖这个特性检测，始终可用。
-
-### 与「路由/NAT 卸载」的相互影响（真实存在）
-
-`zones.js` 里同一个 defaults 段还有 flow offload：
-
-```js
-o = s.option(form.RichListValue, "offloading_type", _("Flow offloading type"));
-o.value('1', _("Software flow offloading"));
-o.value('2', _("Hardware flow offloading"));
-```
-
-**fullcone 依赖 conntrack 的第二张哈希表，而 offload 会把已建立连接卸载到
-快转路径绕过 conntrack** —— 两者同时开启时，走快转的流量可能不按 fullcone 行为处理，
-实测 NAT 类型会不稳定或退化。对称型的 `fully-random` 同理。
-
-本配置里 `kmod-nft-offload=y`（走 PPE 硬件转发），所以：
-- **日常使用**：建议保持卸载开启（吞吐收益大），此时 NAT 类型可能测不准
-- **要测/要稳定 NAT1**：临时把卸载关掉，或接受行为不严格一致
-
-页面会读取 `firewall.@defaults[0].flow_offloading` 并在开启时给出提示。
-
-### 不冲突的部分
-
-- **端口转发 / DMZ**：fullcone 会接管 `dstnat` 链，但正常映射仍工作
-  （DNAT 规则会被注入 fullcone 的 prerouting 路径），不会失效
-- **UPnP**：独立机制（miniupnpd 写自己的 nft 规则），与 fullcone 无冲突，
-  但注意 NAT1 场景下 UPnP 其实不必开（PCDN 客户端一般二选一即可）
-
-### 两个易踩的坑（已处理）
-
-- **启动顺序**：对称型插到 fw4 链里的 `fully-random` 规则，会被随后的
-  `fw4 reload` 清掉。故 `init.d` 用 `START=25`（晚于 firewall 的 `START=19`），
-  并挂了 `procd_add_reload_trigger firewall`，改防火墙后自动重新应用。
-- **exec bit**：`luci.mk` 用 `$(CP)`（`cp -fpR`）复制 `root/`，保留源文件权限。
-  若 git/zip 传输丢了 +x，rpcd 无法 exec、init.d 无法启动。
-  diy-part1.sh 拷贝后统一 `chmod +x`，另有
-  `files/etc/uci-defaults/97-natmode-perm` 开机兜底。
-- **必须用 `form.Map`，不能用 `form.JSONMap`**（早期版本踩过）：
-
-  `form.js` 里 `CBIJSONMap` 的实现是
-
-  ```js
-  __init__(data, ...args) {
-      this.super('__init__', [ 'json', ...args ]);
-      this.config = 'json';
-      this.parsechain = [ 'json' ];
-      this.data = new CBIJSONConfig(data);
-  }
-  ```
-
-  第一个参数被当作 **JSON 数据对象**，不是文件名，且 `parsechain=['json']`，
-  适用于 JSON 配置文件。**`/etc/config/natmode` 是标准 UCI 文件**，
-  用 `JSONMap` 会导致解析失败、保存也写不回去 —— 必须用
-
-  ```js
-  var m = new form.Map('natmode', _('NAT 类型'), _('...'));
-  ```
-
-### 验证切换是否生效
-
-页面顶部「当前状态」显示：当前模式、FullCone 开关、随机端口规则条数、
-`nft_fullcone` 模块是否加载。
-
-想看真实的 STUN 判定结果，可加装 `stun-client`（本仓库未默认编译）：
-
-```sh
-opkg install stun-client
-stun-client stun.miwifi.com -v
-# Independent Mapping, Independent Filter        → 全锥型 NAT1
-# Independent Mapping, Address Dependent Filter  → 受限锥型 NAT2
-# Independent Mapping, Port Dependent Filter     → 端口受限锥型 NAT3
-# Dependent Mapping                              → 对称型 NAT4
-```
+- **DFS**：CN 法规下 160MHz 需要信道 36–64，其中 52–64 属 DFS 信道。
+  ACS 若选中，启动时会先做雷达检测（CAC），**WiFi 可能延迟 1–10 分钟才出现**
+  或自动跳频。这是正常现象，不是故障。
 
 ## PON 光模块卡片（概览页系统下一格）
 
 `packages/luci-app-pon-status`（本地包，非第三方 clone）在概览页新增
 「PON 光模块」卡片，位置为**「系统」卡片的下一格**。
-
-### 位置原理
-
-`luci-mod-status` 的 `index.js`：
-
-```js
-fs.list('/www' + L.resource('view/status/include'))
-  .filter(e => e.type=='file' && e.name.match(/\.js$/))
-  .sort()                      // ← 按文件名字符串排序
-  .map(n => L.require(n))
-```
-
-顺序即卡片顺序。官方默认：
-
-```
-10_system → 20_memory → 25_storage → 29_ports
-          → 30_network → 40_dhcp → 50_dsl → 60_wifi
-```
-
-本包的文件名为 **`15_pon.js`**，落在 `10_system` 之后、`20_memory` 之前，
-即系统卡片的紧邻下一格。
-
-> 之前命名 `70_pon.js` 会排到 `60_wifi` 之后（页面最底部），改 `15` 即可上移。
 
 ### 显示内容
 
@@ -267,102 +113,6 @@ fs.list('/www' + L.resource('view/status/include'))
 | 光模块温度 | `temperature_celsius` | °C |
 | 偏置电流 | `tx_bias_ma` | mA |
 | 供电电压 | `voltage_volts` | V |
-
-换算由 `airoha-ponctl` 的 `convert_optics()` 完成（SFF-8472 → 显示单位）。
-
-### 与温度行的关系
-
-`files/sbin/tempinfo`（autocore）在概览「温度」行显示 `CPU / WiFi / PON` 三个温度。
-
-**PON 温度会在两处出现** —— 温度行 + 本卡片。如需避免重复，把
-`files/sbin/tempinfo` 里 `pon_temp` 的采集段注释掉即可（保留 CPU / WiFi）。
-
-`tempinfo` 的 `SHOW_PON_OPTICS` 已设为 `0`，故温度行**不再**带光功率/电流/电压，
-那些数值统一由本卡片展示，不会重复。
-
-
-## 概览页「温度」一栏
-
-别的 AN758x 固件概览页有「温度：CPU 58.7°C, WiFi 46.0°C」这一行，ponwrt 原生没有。
-原因是**这一行不是插件提供的，而是 autocore 的一个条件安装文件**：
-
-### 机制
-
-```
-luci-mod-status 的 10_system.js
-  → callTempInfo()  → rpcd: luci.getTempInfo  → 执行 /sbin/tempinfo
-  → 输出非空则 fields.splice 插入「温度」行
-```
-
-`10_system.js` 里的判断就是 `if (tempinfo.tempinfo)`，即 `/sbin/tempinfo` 有输出才显示。
-
-### 为什么 ponwrt 没有
-
-autocore 的 Makefile：
-
-```makefile
-ifneq ($(filter ipq% mediatek% qualcommax%, $(TARGETID)),)
-	$(INSTALL_BIN) ./files/tempinfo $(1)/sbin/
-endif
-```
-
-只对 `ipq*` / `mediatek*` / `qualcommax*` 安装 `tempinfo`。
-**airoha（AN7581/AN7583）不在列表里**，所以 ponwrt 编出来的固件没有 `/sbin/tempinfo`，
-概览页也就没有温度行。（ponwrt 自己 `package/emortal/autocore` 也是这份 Makefile，未做适配。）
-
-### 本仓库的解决方式
-
-直接放一份 `files/sbin/tempinfo` 覆盖进 rootfs（autocore 在 airoha 上不装同名文件，不冲突）：
-
-- **CPU**：`/sys/class/thermal/thermal_zone0/temp`
-- **WiFi**：mt76 的 hwmon，`phy*/hwmon*/temp1_input` 和
-  `phy*/device/hwmon/hwmon*/temp1_input` 两个路径都试（mt76 两种挂法都见过）
-- **PON**：`ponctl --device <dev> status --json` + `jsonfilter`，
-  取 `frontend` 组的 `temperature_celsius` / `rx_power_dbm` / `tx_power_dbm` /
-  `tx_bias_ma` / `voltage_volts`（airoha-ponctl 的 `convert_optics()` 已换算成显示单位）
-
-输出示例：
-
-```
-CPU: 58.7°C, WiFi: 46.0°C 48.0°C, PON: 48.5°C ↑2.41dBm ↓-21.30dBm 12.50mA 3.30V
-```
-
-授权不需要额外处理 —— autocore 装的
-`/usr/share/rpcd/acl.d/luci-mod-status-autocore.json` **无条件**授权 `luci.getTempInfo`
-（只有 tempinfo 脚本本身受平台限制）。所以只要 `autocore=y` + `luci-base=y` 就通。
-
-### 疑难排查：温度显示 "?"
-
-`luci-base` 的 rpcd ucode 插件（`root/usr/share/rpcd/ucode/luci`）：
-
-```ucode
-getTempInfo: {
-    call: function() {
-        if (!access('/sbin/tempinfo')) return {};   // access = F_OK，只验证存在
-        const fd = popen('/sbin/tempinfo');
-        let tempinfo = fd.read('all');
-        if (!tempinfo) tempinfo = '?';              // 空输出 → '?'
-        return { tempinfo: tempinfo };
-    }
-}
-```
-
-| 症状 | 原因 |
-|------|------|
-| 温度行**不显示** | `/sbin/tempinfo` 不存在（插件 `return {}`）|
-| 温度行显示 **?** | 文件存在但**缺 +x** → `popen` 失败 → stdout 空 |
-
-`access()` 是 F_OK，只看存在不看可执行，所以权限问题会走到 popen 分支变成 `?`。
-
-本仓库两道保险：
-
-1. workflow 第 6 步 `chmod +x files/sbin/*`（git checkout 可能丢 exec bit）
-2. `files/etc/uci-defaults/98-tempinfo-perm` 首次开机再补一次
-
-uci-defaults 由 `/etc/init.d/boot` 以 source 方式执行（`. "$i"`），自身不需 +x，
-即使打包时权限再丢也能救回来。返回 0 后被自动删除。
-
-已刷机的设备直接 `chmod +x /sbin/tempinfo` 即可，刷新页面生效，无需重启 rpcd。
 
 ### 开关：SHOW_PON_OPTICS
 
@@ -377,25 +127,6 @@ SHOW_PON_OPTICS=0    # 只显示温度（CPU / WiFi / PON）
 
 本仓库**默认设为 `0`**，因为 `luci-app-pon-status` 卡片已用表格形式完整展示
 收发光/电流/电压，两者会重复。若你想只要一行、不装 pon-status 卡片，改回 `1` 即可。
-
-⚠️ 取舍：`SHOW_PON_OPTICS=1` 会把 dBm / mA / V 塞进标题为「温度」的一行，语义不严谨且行较长。
-
-### 与 luci-app-temp-status 的关系
-
-**已移除该插件**，两者功能重叠：
-
-| | autocore tempinfo | luci-app-temp-status |
-|---|---|---|
-| CPU 温度 | ✅ | ✅ |
-| WiFi 温度 | ✅ | ✅ |
-| PON 温度/光功率 | ✅（本仓库扩展）| ❌ |
-| 依赖 | 仅 shell + autocore + ponctl | `ucode` + `ucode-mod-fs` |
-
-保留 autocore 方案：它是 ImmortalWrt 原生机制，无额外依赖，且能顺带扩展 PON。
-移除后也省掉了 `ucode-mod-fs` 等间接项的体积（虽小）。
-
-依赖：`airoha-ponctl`（`ponctl`）、`jsonfilter`、`uci` —— 配置里均已 `=y`。
-脚本对三者都做了 `-x` 存在性检查，缺任一则自动跳过 PON 段，不影响 CPU/WiFi 显示。
 
 ### 一点开销说明
 
@@ -422,6 +153,139 @@ SHOW_PON_OPTICS=0    # 只显示温度（CPU / WiFi / PON）
 | AN7583 | `nokia_xg-040g-mf` `nokia_xg-040g-mf-ubi` |
 
 机型名写错会在 `Generate toolchain cache key` 步骤直接报 `::error::` 并退出，不会静默地全机型编译。
+
+## NPU 固件选择（stock / clanker / none）
+
+NPU 是 Airoha SoC 里那颗 RISC-V 核，**不是** Linux 驱动 —— host 端驱动 `airoha_npu`
+随内核编出，它按固定名字找两个固件镜像：
+
+| 镜像 | 默认文件名 | 上限 | 加载去向 |
+|---|---|---|---|
+| rv32（text+rodata） | `airoha/en7581_npu_rv32.bin`（AN7583 为 `an7583_*`） | 2 MiB | `npu_binary` @0x84000000 |
+| data（.data） | `airoha/en7581_npu_data.bin` | 64 KiB | NPU 本地 SRAM |
+
+`npu_fw` 决定用哪一份：
+
+| 选项 | 行为 |
+|---|---|
+| `stock`（默认） | 用 ponwrt 自带包 `airoha-en7581-npu-firmware`（linux-firmware 里的镜像，MT7992 / **eagle** 数据面） |
+| `clanker` | 用 [ClankerNPU](https://github.com/ClankerConstruction/ClankerNPU) 现编，变体由 `npu_wifi` 决定 |
+| `none` | 不装任何固件（NPU 不起，只剩有线软件转发） |
+
+### ClankerNPU 固件现在是「可选插件包」
+
+`npu_fw=clanker` 不再用 `files/lib/firmware/airoha/` 覆盖 rootfs，而是生成一个标准
+OpenWrt 包放进 `package/custom/`，之后就能用 config 符号勾选：
+
+```sh
+CONFIG_PACKAGE_airoha-en7581-mt7916-npu-firmware=y
+```
+
+包命名规则 `airoha-<soc>-<wifi>-npu-firmware`：
+
+| SoC | 包名 |
+|---|---|
+| AN7581 | `airoha-en7581-mt7916-npu-firmware` / `airoha-en7581-mt7992-npu-firmware` / `airoha-en7581-mt7996-clanker-npu-firmware` |
+| AN7583 | `airoha-an7583-mt7916-npu-firmware` / `-mt7992-` / `-mt7993-` / `-mt7996-` / `-nowifi-` |
+| AN7552 | `airoha-an7552-mt7916-npu-firmware` / `-mt7991-` / `-mt7993-` |
+
+> AN7581 + MT7996 会撞上 linux-firmware 已有的 `airoha-en7581-mt7996-npu-firmware`，
+> 生成脚本会自动改名成 `airoha-en7581-mt7996-clanker-npu-firmware`，避免包符号重名。
+
+**怎么选**：工作流默认按 `npu_wifi` 推断出一个变体并自动写入 `=y`。想自己定，
+在 `configs/<机型>.config` 里直接写那一行即可 —— `Select NPU firmware package`
+步骤检测到就会沿用你的选择，不会覆盖。
+
+**为什么必须先摘 DEFAULT_PACKAGES**：`airoha-en7581-npu-firmware` 是 an7581
+subtarget 的 `DEFAULT_PACKAGE`，`make defconfig` 会把它强制拉回 `=y`，于是它和
+ClankerNPU 包同时进 rootfs —— 两个包装的是同一批文件名，谁生效取决于安装顺序。
+`scripts/strip-default-npu-fw.sh`（4.5 步）把这三个 stock 包从
+`target/linux/airoha/**` 的 `DEFAULT_PACKAGES` / `DEVICE_PACKAGES` 里摘掉，
+装哪个就完全由 `.config` 说了算。包符号本身还在，`npu_fw=stock` 照样能 `=y` 勾上。
+
+### 相关输入项
+
+| 输入 | 默认 | 说明 |
+|---|---|---|
+| `npu_fw` | `stock` | `stock` / `clanker` / `none` |
+| `npu_wifi` | `auto` | 变体：`auto` 按机型推断，或手动选 `MT7916` `MT7992` `MT7996` `MT7991` `MT7993` `NOWIFI`；`all` = 该 SoC 所有变体都编成可选包，只默认勾一个 |
+| `npu_default_wifi` | `MT7916` | `npu_wifi=all` 时默认勾选哪个变体 |
+| `npu_clanker` | `0` | `1` = 适配 Clanker 自改的 host driver。**配 ponwrt 自带驱动必须保持 0** |
+| `npu_fw_prefix` | 空 | 固件名前缀。空 = 驱动默认名（`en7581` / `an7583`），此时不用改 DTS |
+| `npu_wlan_mem` | `true` | 给机型 DTS 补 WiFi 卸载必需的保留内存区（pkt / tx-pkt / tx-bufid / ba） |
+| `npu_src_ref` | `main` | ClankerNPU 源码 ref（`main`=跟上游最新，也可填 commit sha / tag 钉死版本） |
+| `npu_fw_files_fallback` | `false` | `true` = 额外把镜像铺进 `files/lib/firmware/airoha` 兜底（**开了以后包置 n 也会生效**，破坏可选语义，仅排查用） |
+
+### 可用变体（ClankerNPU 共 11 个）
+
+| SoC | 可选 WiFi 芯片 |
+|---|---|
+| AN7552 | MT7916、MT7991、MT7993 |
+| AN7581 | MT7916、MT7992、MT7996 |
+| AN7583 | MT7916、MT7992、MT7993、MT7996、NOWIFI |
+
+`MT7916` / `MT7996` 走 **kite** 数据面，`MT7991` / `MT7992` / `MT7993` 走 **eagle**。
+组合写错会在 `Build NPU firmware` 步骤开头直接报错，不会白跑一趟编译。
+
+### 执行顺序（不能反）
+
+```
+4.5  Strip stock NPU firmware   ← 摘掉 DEFAULT_PACKAGES 里的 stock 固件（必须先做）
+diy-part1.sh 拉插件
+  └─> 5.5  Build NPU firmware package   ← 现编 + 生成 package/custom/airoha-<soc>-<wifi>-npu-firmware
+                                           再 re-index custom feed（不索引符号就不存在）
+载入 .config（基座 + 机型精简配置）
+裁剪机型
+  └─> 7.5  Select NPU firmware package  ← 统一重写 CONFIG_PACKAGE_airoha-*-npu-firmware
+diy-part2.sh
+make defconfig + 校验（含 NPU 固件包符号校验）
+```
+
+### 典型用法
+
+| 场景 | 输入 |
+|---|---|
+| HG5585F-CT / ZN515XG-D 换成 kite 固件 | `npu_fw=clanker`（`npu_wifi` 自动推断为 MT7916）→ 得到 `CONFIG_PACKAGE_airoha-en7581-mt7916-npu-firmware=y` |
+| 把 AN7581 的全部变体都编成可选包 | `npu_wifi=all`，再在 configs 里挑一个写 `=y` |
+| Nokia XG-040G-MF（AN7583） | `profile=nokia_xg-040g-mf` + `npu_fw=clanker` + `npu_wifi=MT7993` |
+| 只想要有线 PPE / HWNAT 卸载 | `npu_wlan_mem=false` |
+| 完全不装固件 | `npu_fw=none` |
+| 想钉死某一版固件 | `npu_src_ref=<commit sha>`（如 `735529c10d5120e10f7e4a6ddf97fb384fce9903`） |
+
+### 注意事项
+
+1. **`npu_clanker` 保持 0**：`CLANKER=1` 会加 `-DUSE_CLANKER_DRIVER`，是给 Clanker 自己改的
+   host driver 用的，其 Makefile 注释明说配 stock 驱动可能坏；且它只影响 eagle 的 `sta_q`
+   与 SRAM type 41 的 sizing，kite 变体开了也没差别。
+2. **工具链必须是 elf/newlib**：固件用 `-march=rv32imc_zicsr_zifencei -mabi=ilp32` 编，
+   `riscv64-linux-gnu` 编不了；脚本会自动下载 xpack `riscv-none-elf-gcc 14.2.0-3`（约 100 MB）。
+3. **data 段只有 64 KiB 上限**，比 rv32 的 2 MiB 紧得多；脚本编完先自检，超限直接失败，
+   不会编出刷上才炸的镜像。
+4. **`npu_src_ref` 默认 `main`（跟上游最新）**：好处是总能吃到 ClankerNPU 的修复，
+   代价是**不同时间跑 CI 编出的固件可能不同** —— 上游一改代码，行为就跟着变（且没法复现）。
+   出问题时建议填 commit sha 钉死，先本地编一次验证再定。
+   无论用哪种，Release 说明里都会记下当次的实际 gitrev，可以回溯这台机器刷的是哪版。
+5. **机型 → WiFi 映射表**在 `Resolve device profile` 步骤里，只登记了
+   `fiberhome_hg5585f-ct/cu` 与 `znxt_zn515xg-d/znxt_zn504xg-d`；其他机型会打 warning
+   并回退 MT7916，请手动选 `npu_wifi`。
+6. **`profile=all` + `clanker`** 只会给所有机型装同一份固件，脚本会 warning，建议按机型分别编。
+7. Release 说明里会带上 NPU 固件的 SoC / 变体 / gitrev / 可选包名 / 两个 bin 的大小，便于回溯版本。
+8. **包没进索引的表现**：`package/custom/` 下有包目录，但固件里没有固件文件，且不报错。
+   原因是 `CONFIG_PACKAGE_xxx` 符号不存在，defconfig 把 `=y` 当无效符号静默删掉。
+   5.5 步会 re-index custom feed 并打印 `package/feeds/custom/` 链接，
+   9 步在 defconfig 后强制校验符号仍为 `=y`，失败会带 5 条排查线索直接退出。
+
+### 刷完怎么验
+
+```sh
+dmesg | grep -i npu           # probe 时打 NPU fw version，固件 boot 行带 GITREV
+ls -l /lib/firmware/airoha/   # 两个 bin 在位
+```
+
+- 缺文件或名字不匹配：`request_firmware_direct()` 返回 `-ENOENT`，驱动映射成 `-EPROBE_DEFER`，
+  NPU 一直不绑定（`deferred probe pending` 里能看到具体文件名），不会像以前那样卡 60 秒 sysfs fallback。
+- 大小超限：直接 `-E2BIG`。
+- LuCI「Airoha SoC 状态页」（`luci-app-airoha-npu`）可看 NPU 卸载 / PPE 流表是否正常。
 
 ## 工具链缓存机制
 
@@ -499,8 +363,3 @@ endif
 2. 再跑一次 `scope = firmware` 出固件；
 3. 若仍超时，把 `configs/*.config` 里不需要的 luci-app / 语言包删掉再提交。
 
-## 注意事项
-
-- 刷机前用 [AN758x-Stock2UBI](https://github.com/pbs05) 备份原厂 flash；烽火 `factory` 备份需先过 `FiberHome Factory` 转换。
-- 刷完后通过 U-Boot Web 或 LuCI → 网络 → PON → Configuration → PON board data 恢复校准/身份数据，否则 WiFi 与 PON  Registration 异常。
-- `toolchain-cache` Release 由流程自动维护，`Remove old releases` 用 `delete_tag_pattern: ^<DEVICE_NAME>-` 限定，不会误删。
