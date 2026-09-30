@@ -1,0 +1,60 @@
+给 mt76_npu_init() 的三个失败出口补 dev_err，绑定成功时补 dev_info。
+
+原始实现里 npu / ppe / reserved-memory 三步失败全部直接 goto 后 return err，
+而调用方 mt7915/pci.c 忽略了返回值（见 113 的 pci.c 段）。于是 NPU 卸载
+静默失效：dmesg 既不报错也不提示，WiFi 照常起来，无法判断是没编译进来
+还是初始化失败、失败在哪一步。
+
+加了日志之后，重编固件后 dmesg | grep -i npu 就能直接定位。
+---
+ npu.c | 40 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+
+--- a/npu.c
++++ b/npu.c
+@@ -4,6 +4,7 @@
+  * Author: Lorenzo Bianconi <lorenzo@kernel.org>
+  */
+ #include <linux/kernel.h>
++#include <linux/device.h>
+ #include <net/flow_offload.h>
+ #include <net/pkt_cls.h>
+ 
+@@ -453,6 +454,8 @@
+ 
+ 	if (IS_ERR(npu)) {
+ 		err = PTR_ERR(npu);
++		dev_err(dev->dev, "NPU bind failed: airoha_npu_get() err=%d"
++			" (找不到 NPU 设备，或其 platform 驱动尚未 probe 完成)\n", err);
+ 		goto error_unlock;
+ 	}
+ 
+@@ -464,12 +467,17 @@
+ 
+ 	if (IS_ERR(ppe_dev)) {
+ 		err = PTR_ERR(ppe_dev);
++		dev_err(dev->dev, "NPU bind failed: airoha_ppe_get_dev() err=%d\n",
++			err);
+ 		goto error_npu_put;
+ 	}
+ 
+ 	err = airoha_npu_wlan_init_reserved_memory(npu);
+-	if (err)
++	if (err) {
++		dev_err(dev->dev, "NPU bind failed: reserved memory init err=%d"
++			" (检查 DTS 的 memory-region-names 是否齐全)\n", err);
+ 		goto error_ppe_put;
++	}
+ 
+ 	dev->mmio.phy_addr = phy_addr;
+ 	dev->mmio.npu_type = type;
+@@ -483,6 +491,9 @@
+ 	rcu_assign_pointer(dev->mmio.npu, npu);
+ 	rcu_assign_pointer(dev->mmio.ppe_dev, ppe_dev);
+ 	synchronize_rcu();
++
++	dev_info(dev->dev, "NPU bound: type=%d phy=%pa hwrro=%d token=%u\n",
++		 type, &phy_addr, dev->hwrro_mode, dev->rx_token_size);
+ 
+ 	mutex_unlock(&dev->mutex);
+ 
