@@ -27,15 +27,15 @@ env:
   NPU_FW_PREFIX: ${{ github.event.inputs.npu_fw_prefix || '' }}
   NPU_WLAN_MEM: ${{ github.event.inputs.npu_wlan_mem || 'true' }}
   NPU_SRC_REF: ${{ github.event.inputs.npu_src_ref || 'main' }}
-  # ---- 自定义补丁 ----
-  APPLY_PATCHES: ${{ github.event.inputs.apply_patches || 'true' }}
-  PATCH_STRICT: ${{ github.event.inputs.patch_strict || 'true' }}
-  # ---- mt76 无线驱动 ----
-  # repo     = 用仓库 mt76/ 覆盖 package/kernel/mt76（启用 WiFi NPU 卸载）
-  # upstream = 不动，用 ponwrt 自带版本（不含 NPU vendor 改写）
-  MT76_SRC: ${{ github.event.inputs.mt76 || 'repo' }}
-  # ---- 源码下载加速（自建 runner / 国内网络用）----
-  GH_PROXY: ${{ github.event.inputs.gh_proxy || 'false' }}
+  # ---- mt76 无线驱动包覆盖 ----
+  # vendored = 用本仓库 mt76/ 目录（随仓库携带，默认，不依赖网络）
+  # remote   = 编译前从 GitHub 现拉并覆盖
+  # none     = 不动，用 ponwrt 自带 mt76
+  MT76_SOURCE: ${{ github.event.inputs.mt76_source || 'vendored' }}
+  MT76_REPO: ${{ github.event.inputs.mt76_repo || 'qwe3017/ponwrt' }}
+  MT76_REF: ${{ github.event.inputs.mt76_ref || 'master' }}
+  MT76_SUBDIR: package/kernel/mt76
+  MT76_FALLBACK: ${{ github.event.inputs.mt76_fallback || 'true' }}
 
 on:
   repository_dispatch:
@@ -142,40 +142,33 @@ on:
         description: 'ClankerNPU 源码 ref (默认 main=跟上游最新；也可填 commit sha / tag 钉死版本)'
         required: false
         default: 'main'
-      apply_patches:
-        description: '应用 patches/ 下的自定义补丁 (放到对应子目录: ponwrt / kernel / clanker)'
-        required: true
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      patch_strict:
-        description: '补丁打不上时立刻失败 (false=仅警告继续编译)'
-        required: false
-        default: 'true'
-        type: choice
-        options:
-          - 'true'
-          - 'false'
-      mt76:
-        description: 'mt76 无线驱动: repo=用仓库 mt76/(含 NPU 卸载, 推荐); upstream=用 ponwrt 自带'
-        required: false
-        default: 'repo'
-        type: choice
-        options:
-          - repo
-          - upstream
-      gh_proxy:
-        description: 'git clone 走 gh-proxy.com 镜像加速 (GitHub 官方 runner 无需开启)'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
       upload_release:
         description: '固件发布到 Release（false 则只传 Artifact）'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      mt76_source:
+        description: 'mt76 驱动来源 (vendored=仓库自带/remote=现拉/none=用源码自带)'
+        required: true
+        default: 'vendored'
+        type: choice
+        options:
+          - vendored
+          - remote
+          - none
+      mt76_repo:
+        description: 'mt76 远端仓库 (仅 mt76_source=remote 生效，格式 owner/repo)'
+        required: false
+        default: 'qwe3017/ponwrt'
+      mt76_ref:
+        description: 'mt76 远端分支/tag/commit (仅 mt76_source=remote 生效)'
+        required: false
+        default: 'master'
+      mt76_fallback:
+        description: 'remote 拉取失败时回退到仓库自带 mt76'
         required: false
         default: 'true'
         type: choice
@@ -262,6 +255,7 @@ jobs:
         echo "Branch   : ${REPO_BRANCH}"
         echo "Scope    : ${BUILD_SCOPE}"
         echo "NPU 固件 : ${NPU_FW} / ${NPU_WIFI} / clanker=${NPU_CLANKER} / mem=${NPU_WLAN_MEM}"
+        echo "mt76     : ${MT76_SOURCE} (${MT76_REPO}@${MT76_REF})"
         echo "========================================"
 
     # =========================================================
@@ -314,14 +308,41 @@ jobs:
       run: |
         cd "$BUILD_ROOT"
         df -hT "$PWD"
-        CLONE_URL="$REPO_URL"
-        if [ "$GH_PROXY" = "true" ]; then
-          CLONE_URL="https://gh-proxy.com/${REPO_URL}"
-          echo ">>> 使用镜像加速: $CLONE_URL"
-        fi
-        git clone "$CLONE_URL" -b "$REPO_BRANCH" --single-branch --depth=1 openwrt
+        git clone "$REPO_URL" -b "$REPO_BRANCH" --single-branch --depth=1 openwrt
         ln -sf "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/openwrt"
         cd openwrt && echo "commit: $(git rev-parse --short HEAD)"
+
+    # =========================================================
+    # 2.5 覆盖 mt76 无线驱动包
+    #
+    #     ⚠️ 必须在 feeds update 与 make download / defconfig 之前做：
+    #     mt76 的 Makefile 决定拉哪一版源码，patches/ 决定打哪些补丁，
+    #     两者在 make download 时就已经定型，之后再改不会重新应用。
+    #
+    #     113 号补丁给 MT7915/MT7916 加了 NPU 卸载（AN7581 上 WiFi 走 NPU），
+    #     但 npu.c 只有在 Makefile 打开 CONFIG_MT7915_NPU 时才编进去 ——
+    #     所以 Makefile 与补丁必须成套替换，脚本里也是整目录替换而非合并。
+    #
+    #     云端 runner 直连 GitHub，这里不使用 gh-proxy（那是本机手动下载用的）。
+    # =========================================================
+    - name: Sync mt76 driver package
+      id: mt76
+      run: |
+        cd "$BUILD_ROOT/openwrt"
+        chmod +x "$GITHUB_WORKSPACE/scripts/sync-mt76.sh"
+
+        MT76_SOURCE="$MT76_SOURCE" \
+        MT76_REPO="$MT76_REPO" \
+        MT76_REF="$MT76_REF" \
+        MT76_SUBDIR="$MT76_SUBDIR" \
+        MT76_FALLBACK="$MT76_FALLBACK" \
+        CI_REPO="$GITHUB_WORKSPACE" \
+          bash "$GITHUB_WORKSPACE/scripts/sync-mt76.sh"
+
+        # 把元信息带进后续步骤（Release 说明要用）
+        if [ -f .mt76-sync.env ]; then
+          cat .mt76-sync.env >> "$GITHUB_ENV"
+        fi
 
     # =========================================================
     # 3. dl 下载缓存
@@ -354,57 +375,12 @@ jobs:
         ./scripts/feeds install -a
 
     # =========================================================
-    # 4.5 应用自定义补丁 —— patches/ 下三个子目录，各自对应一个目标
-    #     ponwrt/  直接打到源码树（DTS / package / 脚本等）
-    #     kernel/  复制到 target/linux/airoha/patches-*/，由 quilt 在编内核前应用
-    #     目录不存在或为空则自动跳过，不影响正常构建
-    # =========================================================
-    - name: Apply custom patches
-      if: env.APPLY_PATCHES == 'true'
-      run: |
-        set -uo pipefail
-        cd "$BUILD_ROOT/openwrt"
-        REPO_DIR="$GITHUB_WORKSPACE"
-        chmod +x "$REPO_DIR/scripts/"*.sh
-
-        echo "===== patches/ 目录内容 ====="
-        find "$REPO_DIR/patches" -type f 2>/dev/null | sed "s|$REPO_DIR/||" || echo "(空)"
-
-        # 1) 源码树补丁（立即生效）
-        PATCH_STRICT="$PATCH_STRICT" \
-          bash "$REPO_DIR/scripts/apply-patches.sh" . "$REPO_DIR/patches/ponwrt" "ponwrt"
-
-        # 2) 内核补丁（复制进 target patches 目录，编译内核时才应用）
-        bash "$REPO_DIR/scripts/install-kernel-patches.sh" . "$REPO_DIR/patches/kernel" \
-          || { [ "$PATCH_STRICT" = "true" ] && exit 1; }
-
-    # =========================================================
-    # 4.6 安装 mt76 无线驱动（AN758x 的 WiFi NPU 卸载）
-    #
-    #   仓库 mt76/ = Makefile（给 an7581 / an7583 开 CONFIG_MT76_NPU /
-    #   CONFIG_MT7915_NPU）+ 3 个补丁，其中 113 是 NPU vendor 改写。
-    #   ponwrt 自带的 package/kernel/mt76 只有 100/110 两个补丁，
-    #   没有 NPU 相关改动 → 想让 WiFi 走 NPU 卸载就必须换这个包。
-    #
-    #   选 upstream 则整个步骤跳过（编译出的 WiFi 不卸载到 NPU）。
-    # =========================================================
-    - name: Install mt76 wireless driver
-      if: env.MT76_SRC == 'repo'
-      run: |
-        set -uo pipefail
-        cd "$BUILD_ROOT/openwrt"
-        chmod +x "$GITHUB_WORKSPACE/scripts/"*.sh
-        bash "$GITHUB_WORKSPACE/scripts/install-mt76.sh" . "$GITHUB_WORKSPACE/mt76" "$PATCH_STRICT"
-
-    # =========================================================
     # 5. diy-part1.sh —— 拉取可选插件
     # =========================================================
     - name: Pull optional plugins (diy-part1.sh)
       run: |
         cd "$BUILD_ROOT/openwrt"
         chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
-        # GH_PROXY 来自 workflow 级 env，会自动注入每个 step 的 shell 环境，
-        # diy-part1.sh 里的 clone() 读它决定要不要走 gh-proxy.com 镜像
         "$GITHUB_WORKSPACE/$DIY_P1_SH"
 
     # =========================================================
@@ -414,10 +390,9 @@ jobs:
     #
     #     ⚠️ 为什么不做成独立 ipk：airoha-en7581-npu-firmware 是 an7581
     #     subtarget 的 DEFAULT_PACKAGE（target/linux/airoha/an7581/target.mk），
-    #     两个包装同名文件要么冲突要么靠安装顺序碰运气，不如走 files/ 覆盖 ——
+    #     make defconfig 会把它强制拉回 =y，禁不掉。两个包装同名文件
+    #     要么冲突要么靠安装顺序碰运气，不如直接走 files/ 覆盖 ——
     #     files/ 是在 ipk 安装完之后才铺进 rootfs 的，必然生效。
-    #     另外 .config 里置 n 也有效（package-metadata.pl 生成的是 default 不是
-    #     select），step 7.5 双管齐下。
     # =========================================================
     - name: Build NPU firmware (ClankerNPU)
       if: env.NPU_FW == 'clanker' && env.BUILD_SCOPE != 'toolchain-only'
@@ -428,15 +403,8 @@ jobs:
         SOC_UP=$(echo "$SOC" | tr 'a-z' 'A-Z')
         chmod +x "$REPO_DIR/scripts/"*.sh
 
-        # APPLY_PATCHES=false 时不传补丁目录，固件按上游原样编译
-        CLANKER_PATCH_DIR=""
-        if [ "$APPLY_PATCHES" = "true" ] && [ -d "$REPO_DIR/patches/clanker" ]; then
-          CLANKER_PATCH_DIR="$REPO_DIR/patches/clanker"
-        fi
-
         SOC="$SOC_UP" WIFI="$NPU_WIFI" CLANKER="$NPU_CLANKER" \
         CLANKER_REF="$NPU_SRC_REF" FW_PREFIX="$NPU_FW_PREFIX" \
-        CLANKER_PATCH_DIR="$CLANKER_PATCH_DIR" PATCH_STRICT="$PATCH_STRICT" \
         OUT_DIR="$REPO_DIR/files/lib/firmware/airoha" \
         WORK="$REPO_DIR/.clanker-build" \
           bash "$REPO_DIR/scripts/build-npu-fw.sh"
@@ -528,7 +496,7 @@ jobs:
         disable_stock() {
           for p in $STOCK_PKGS; do
             sed -i "s|^CONFIG_PACKAGE_${p}=[ym]|# CONFIG_PACKAGE_${p} is not set|" .config
-            # sed -i "s|^CONFIG_PACKAGE_${p}=[ym]|CONFIG_PACKAGE_${p}=n|" .config
+          # sed -i "s|^CONFIG_PACKAGE_${p}=[ym]|CONFIG_PACKAGE_${p}=n|" .config
           done
         }
 
@@ -589,6 +557,35 @@ jobs:
           exit 1
         fi
         echo "✅ PON 关键包校验通过"
+
+        # =========================================================
+        # mt76 覆盖校验（defconfig 之后再做一次）
+        #   sync-mt76.sh 已经校验过一遍，这里在 defconfig 之后复核，
+        #   目的是抓「后续步骤又把 mt76 覆盖回去」这类情况。
+        #   none 模式不校验（用的就是源码自带版本）。
+        # =========================================================
+        if [ "${MT76_SOURCE}" != "none" ]; then
+          MT76_FAIL=0
+          for f in CONFIG_MT76_NPU CONFIG_MT7915_NPU; do
+            grep -q "$f" package/kernel/mt76/Makefile \
+              && echo "✅ mt76 Makefile 含 $f" \
+              || { echo "::error::mt76 Makefile 缺少 $f（NPU 卸载不会生效）"; MT76_FAIL=1; }
+          done
+          for p in 100-wifi-mt76-mt7996-Use-tx_power-from-default-fw-if-EEP.patch \
+                   110-mt7915-add-mt7916-cal-free-merge.patch \
+                   113-mt7915-npu-vendor-rewrite.patch; do
+            [ -f "package/kernel/mt76/patches/$p" ] \
+              && echo "✅ mt76 补丁就位: $p" \
+              || { echo "::error::mt76 缺少补丁 $p"; MT76_FAIL=1; }
+          done
+          if [ "$SOC" = "an7581" ] && [ "$MT76_FAIL" = "1" ]; then
+            echo "::error::an7581 的 mt76 NPU 覆盖不完整，终止"
+            exit 1
+          fi
+          echo "✅ mt76 校验通过 (source=${MT76_SOURCE})"
+        else
+          echo "ℹ️  MT76_SOURCE=none，跳过 mt76 校验（使用 ponwrt 自带版本）"
+        fi
 
         # =========================================================
         # NPU 固件校验（defconfig 之后）
@@ -687,25 +684,6 @@ jobs:
         echo "缓存 Key  : $CACHE_KEY"
         echo "缓存前缀  : $CACHE_PREFIX"
         echo "========================================"
-
-    # =========================================================
-    # 9.2 WiFi NPU 卸载自检（defconfig 之后、编译之前）
-    #
-    #     "补丁复制进 package/kernel/mt76/patches/" 不等于 "编出来会生效"：
-    #       ① NPU 宏由 Makefile 按 subtarget 判断（an7581 / an7583）
-    #       ② 113 补丁的 Kconfig 依赖内核 NET_AIROHA_NPU
-    #       ③ DTS 必须带 npu-wlan 保留内存区
-    #       ④ NPU 固件得有着落（stock 包 或 files/ 覆盖）
-    #     任一环断掉，Wi-Fi 都会悄悄退回纯软件转发，日志里几乎看不出来。
-    #     这里只打 warning 不阻断 —— 把"没生效"变成一条可见的提示。
-    # =========================================================
-    - name: Verify WiFi NPU offload
-      run: |
-        set -uo pipefail
-        cd "$BUILD_ROOT/openwrt"
-        chmod +x "$GITHUB_WORKSPACE/scripts/"*.sh
-        SOC="$SOC" PROFILE="$PROFILE" NPU_FW="$NPU_FW" NPU_WLAN_MEM="$NPU_WLAN_MEM" \
-          bash "$GITHUB_WORKSPACE/scripts/verify-wifi-npu.sh" .
 
     # =========================================================
     # 9.5 下载工具链源码 —— 必须在编工具链之前
@@ -1051,8 +1029,7 @@ jobs:
           echo "| 提交 | \`$(cd "$BUILD_ROOT"/openwrt && git rev-parse --short HEAD)\` |"
           echo "| 编译时间 | $(date '+%Y-%m-%d %H:%M:%S') (Shanghai) |"
           echo "| NPU 固件 | \`${NPU_FW}\`$( [ "$NPU_FW" = "clanker" ] && echo " (${NPU_WIFI}, ClankerNPU)" ) |"
-          echo "| mt76 无线驱动 | \`${MT76_SRC}\`$([ "$MT76_SRC" = "repo" ] && echo "（含 113 NPU vendor 改写）" || echo "（上游版，无 NPU 卸载）") |"
-          echo "| WiFi NPU 内存区 | \`${NPU_WLAN_MEM}\` |"
+          echo "| mt76 驱动 | \`${MT76_MODE:-未覆盖}\`$( [ "${MT76_MODE:-none}" != "none" ] && echo " — mt76-${MT76_PKG_DATE:-?} @ \`${MT76_PKG_VERSION:-?}\`" ) |"
           echo ""
 
           # NPU 固件用 ClankerNPU 现编时，把版本/变体/校验写进 Release 便于回溯
@@ -1070,6 +1047,20 @@ jobs:
               echo "| npu_rv32.bin | ${NPU_RV32_SIZE} bytes (上限 2097152) |"
               echo "| npu_data.bin | ${NPU_DATA_SIZE} bytes (上限 65536) |"
               echo "| CLANKER | \`${NPU_CLANKER}\` |"
+              echo ""
+            } >> release.txt
+          fi
+          # mt76 覆盖详情：用的哪套驱动源码、打了哪些补丁
+          if [ "${MT76_MODE:-none}" != "none" ] && [ -f "$BUILD_ROOT/openwrt/.mt76-sync.env" ]; then
+            {
+              echo "### mt76 无线驱动"
+              echo "| 项目 | 详情 |"
+              echo "|------|------|"
+              echo "| 来源 | \`${MT76_MODE}\` |"
+              echo "| 源码日期 | \`${MT76_PKG_DATE:-?}\` |"
+              echo "| 源码 commit | \`${MT76_PKG_VERSION:-?}\` |"
+              echo "| 远端仓库 | ${MT76_REPO}@${MT76_REF} |"
+              echo "| 补丁 | $(ls -1 "$BUILD_ROOT/openwrt/package/kernel/mt76/patches" 2>/dev/null | tr '\n' ' ') |"
               echo ""
             } >> release.txt
           fi
