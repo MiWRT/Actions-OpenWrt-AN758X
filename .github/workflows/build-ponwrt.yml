@@ -198,6 +198,56 @@ jobs:
       uses: actions/checkout@v5
 
     # =========================================================
+    # 0a. 行尾自愈（Windows / core.autocrlf 污染防护）
+    # ---------------------------------------------------------
+    # 背景：在 Windows 上 core.autocrlf=true 时提交，仓库里的 .sh
+    #      会变成 CRLF，shebang 随之变成 "#!/bin/bash\r"，Linux runner
+    #      找不到该解释器，报 "cannot execute: required file not found"
+    #      （exit 127）。.config / .patch / Makefile 带 CR 同样会让
+    #      kconfig 取值变成 "y\r"、quilt 打补丁失败。
+    # 这里统一在编译前剥掉 CR，并对仍带 CRLF 的提交发出告警，
+    # 使得即使 .gitattributes 失守也不会直接卡死构建。
+    # =========================================================
+    - name: Normalize line endings (CRLF -> LF)
+      run: |
+        set -euo pipefail
+        cd "$GITHUB_WORKSPACE"
+
+        mapfile -t FILES < <(find . -path ./.git -prune -o -type f -print)
+
+        FIXED=0
+        for f in "${FILES[@]}"; do
+          case "$f" in
+            *.zip|*.gz|*.xz|*.bin|*.elf|*.ipk|*.apk|*.png|*.jpg|*.ico) continue ;;
+          esac
+          if LC_ALL=C grep -qU $'\r' "$f" 2>/dev/null; then
+            # 只处理文本文件：剥掉行尾 CR，孤立 CR 还原成换行
+            sed -i 's/\r$//; s/\r/\n/g' "$f"
+            FIXED=$((FIXED + 1))
+            echo "  fix CRLF: $f"
+          fi
+        done
+
+        if [ "$FIXED" -gt 0 ]; then
+          echo "::warning::检出后发现 $FIXED 个文件含 CRLF，已临时修正为 LF。请在本地执行: git add --renormalize . && git commit"
+        else
+          echo "✅ 所有文本文件均为 LF"
+        fi
+
+        # 所有自定义脚本显式赋可执行位（zip 解包 / 跨平台拷贝常丢失该位）
+        chmod +x "$GITHUB_WORKSPACE"/*.sh "$GITHUB_WORKSPACE"/scripts/*.sh 2>/dev/null || true
+        chmod +x "$GITHUB_WORKSPACE"/files/sbin/tempinfo "$GITHUB_WORKSPACE"/files/etc/uci-defaults/* 2>/dev/null || true
+
+        # 兜底体检：shebang 必须干净
+        for f in "$GITHUB_WORKSPACE"/diy-part*.sh "$GITHUB_WORKSPACE"/scripts/*.sh; do
+          head -c 256 "$f" | LC_ALL=C grep -qU $'\r' && {
+            echo "::error::$f 仍含 CR，shebang 不可用"
+            exit 1
+          }
+        done
+        echo "✅ shebang 体检通过"
+
+    # =========================================================
     # 0. 解析机型 -> 自动校正 SoC，导出 device name
     # =========================================================
     - name: Resolve device profile
