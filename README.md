@@ -8,20 +8,26 @@
 ```
 .github/workflows/build-ponwrt.yml     主构建流程（机型可选 / 释放空间 / 工具链缓冲）
 .github/workflows/cache-keepalive.yml  每 5 天 touch 缓存，防止被回收
+mt76/           定制 mt76 无线驱动（Makefile + 3 个补丁），编译前覆盖进 package/kernel/mt76
+                详见 README-mt76.md —— AN7581 上启用 MT7915/MT7916 的 NPU 卸载
 diy-part1.sh    拉取可选插件到 package/custom（passwall/openclash/mosdns/lucky/tailscale 等，默认全关）
 diy-part2.sh    默认值定制：① 时区改中国（Asia/Shanghai, CST-8）
                 ② 5G WiFi：国家码 CN / 信道 auto / 频宽 160MHz
 configs/        每机型一份精简 diffconfig（约 440 行，需 make defconfig 展开）
 files/          自定义 rootfs 文件，会自动拷进源码（sbin/tempinfo + 两个 uci-defaults））
 scripts/        NPU 固件现编脚本（build-npu-fw.sh / apply-npu-dts.sh）
-                补丁脚本（apply-patches.sh / install-kernel-patches.sh）
-                mt76 安装脚本（install-mt76.sh）/ WiFi NPU 自检（verify-wifi-npu.sh）
-patches/        自定义补丁，按目标分 ponwrt/ kernel/ clanker/ 三个子目录（详见 patches/README.md）
-mt76/           定制版 mt76 无线驱动包（Makefile + patches/），覆盖 package/kernel/mt76 → 启用 WiFi NPU 卸载
-scripts/install-mt76.sh  把 mt76/ 装进源码树（step 4.6，见下文）
-scripts/verify-wifi-npu.sh  step 9.2 编译前自检「NPU 卸载到底会不会生效」
+                mt76 同步脚本（sync-mt76.sh / fetch-mt76-local.sh）
 files/lib/firmware/airoha/   ClankerNPU 编译产物落点，会覆盖进 rootfs（构建时生成，不入库）
 ```
+
+## mt76 无线驱动覆盖
+
+编译前自动把 `mt76/` 覆盖到源码的 `package/kernel/mt76/`，用于启用
+**AN7581 上 MT7915/MT7916 的 Airoha NPU 卸载**（上游 ponwrt 自带版本不含此功能）。
+
+- 云端默认 `mt76_source=vendored`（用本仓库 `mt76/`，不依赖网络）
+- 本机手动更新 mt76 走 gh-proxy：`./scripts/fetch-mt76-local.sh`
+- 完整说明见 **[README-mt76.md](README-mt76.md)**（文件用途 / 放置目录 / 内核版本依赖 / 注意事项）
 
 ## diy 脚本
 
@@ -35,7 +41,7 @@ files/lib/firmware/airoha/   ClankerNPU 编译产物落点，会覆盖进 rootfs
 |------|-----|------|
 | `ADD_AIROHA_NPU` | `luci-app-airoha-npu` | Airoha SoC 状态页：NPU 卸载 / CPU 频率与超频 / Frame Engine / PPE 流表 |
 
-另外默认还拉两个包（来自 monorepo `qwe3017/luci-app`，由 diy-part1.sh clone 后把子目录拷进 `package/custom`）：
+另外 CI 仓库自带两个本地包（`packages/`，不走 clone，由 diy-part1.sh 拷进 `package/custom`）：
 
 | 包 | 作用 |
 |-----|------|
@@ -88,7 +94,7 @@ WIFI_5G_FALLBACK="${WIFI_5G_FALLBACK:-HE80}"
 
 ## PON 光模块卡片（概览页系统下一格）
 
-`luci-app-pon-status`（来自 `qwe3017/luci-app` monorepo）在概览页新增
+`packages/luci-app-pon-status`（本地包，非第三方 clone）在概览页新增
 「PON 光模块」卡片，位置为**「系统」卡片的下一格**。
 
 ### 显示内容
@@ -266,94 +272,6 @@ ls -l /lib/firmware/airoha/   # 两个 bin 在位
   NPU 一直不绑定（`deferred probe pending` 里能看到具体文件名），不会像以前那样卡 60 秒 sysfs fallback。
 - 大小超限：直接 `-E2BIG`。
 - LuCI「Airoha SoC 状态页」（`luci-app-airoha-npu`）可看 NPU 卸载 / PPE 流表是否正常。
-
-## 自定义补丁
-
-把补丁放进 `patches/` 下对应的子目录即可，构建时自动应用：
-
-| 目录 | 打给谁 | 何时生效 |
-|---|---|---|
-| `patches/ponwrt/` | ponwrt 源码树根目录 | clone 后立刻 `git apply` |
-| `patches/kernel/` | 内核源码 | 复制到 `target/linux/airoha/patches-*/`，编内核时由 quilt 应用 |
-| `patches/clanker/` | ClankerNPU 固件源码 | 拉源码后、编译前（`npu_fw=clanker` 时） |
-
-| 输入项 | 默认 | 说明 |
-|---|---|---|
-| `apply_patches` | `true` | 总开关，`false` 三个目录全跳过 |
-| `patch_strict` | `true` | 补丁打不上立刻失败；`false` 只警告继续编 |
-
-要点：
-
-- 只收 `.patch` / `.diff`，按文件名字母序应用，用数字前缀（`001-` / `010-`）控制顺序。
-- 路径必须 `-p1`（`git diff` 生成的默认就是）。
-- **已应用过的会自动跳过**（反向 apply 检测），重跑 CI 不会重复打。
-- `kernel/` 下建议用 `9xx-` 前缀排在官方补丁之后，否则会被警告。
-- 目录为空或不存在 → 自动跳过，不报错。
-- 失败时打印 `git apply --verbose` 详细输出，常见原因是前缀不对 / 上游改过文件 / 目录放错。
-
-完整说明见 [`patches/README.md`](patches/README.md)。
-
-> ⚠️ 顺序提醒：`patches/ponwrt/` 在 step 4.5 应用，NPU 的 DTS 修改在 step 5.5。
-> 若你的补丁也改了同一个 DTS 且动到了 `#include "an7581.dtsi"` 那行，
-> `apply-npu-dts.sh` 会找不到锚点（只警告不失败，但内存区没补上）。
-> 这种情况建议把内存区写进你自己的补丁，并把 `npu_wlan_mem` 设为 `false`。
-
-## mt76 无线驱动（WiFi NPU 卸载）
-
-ponwrt 自带的 `package/kernel/mt76` 只有 `100` / `110` 两个补丁，**没有任何 NPU 相关改动**，
-编出来的 WiFi 走纯软件转发。仓库里的 `mt76/` 是定制版，比上游多两样东西：
-
-| 文件 | 作用 |
-|---|---|
-| `mt76/Makefile` | 给 **an7581 与 an7583** 打开 `CONFIG_MT76_NPU` / `CONFIG_MT7915_NPU`（`ifneq ($(CONFIG_TARGET_airoha_an7581)$(CONFIG_TARGET_airoha_an7583),)` 段） |
-| `mt76/patches/113-mt7915-npu-vendor-rewrite.patch` | mt7915 驱动的 NPU vendor 改写（`100` / `110` 与上游一致） |
-
-覆盖动作由 `scripts/install-mt76.sh` 在 **step 4.6** 完成（在打完自定义补丁之后、拉插件之前），
-补丁随后由 OpenWrt 的 quilt 在解压 mt76 源码后自动应用 —— 所以不用手工打。
-
-| 输入项 | 默认 | 说明 |
-|---|---|---|
-| `mt76` | `repo` | `repo` = 用仓库 `mt76/` 覆盖（启用 WiFi NPU 卸载）；`upstream` = 不动，用 ponwrt 自带版本 |
-
-要点：
-
-- mt76 源码版本钉在 `PKG_SOURCE_VERSION=be5ce791…`（2026-09-01）。上游换版本时脚本会告警，
-  这时要重新整理 `mt76/patches/`（补丁贴不上会直接编译失败）。
-- `113` 补丁的 Kconfig 里 `MT7915_NPU depends on NET_AIROHA_NPU`，
-  内核需开 NPU 支持（`configs/*.config` 里没有该符号时，step 9.2 会给出 warning）。
-- AN7581 / AN7583 **两个 subtarget 都开了 NPU 宏**。此前只判断 `CONFIG_TARGET_airoha_an7581`，
-  AN7583 机型（`nokia_xg-040g-mf` / `-mf-ubi`，`configs/an7583.config` 里
-  `CONFIG_PACKAGE_kmod-mt7915e=y`）编出来的 WiFi 完全没有 NPU 卸载 —— 现已修正。
-  若 AN7583 上出现 mt76 编译错误，把 `mt76` 输入项改回 `upstream` 即可回退。
-- 换成别的 mt76：直接替换 `mt76/Makefile` 与 `mt76/patches/` 即可；
-  目录不存在或为空 → 脚本自动跳过，不会破坏构建。
-- 校验失败（缺 Makefile / 缺 113 补丁 / 空补丁 / 非标准 diff）时按 `patch_strict` 处理：默认直接失败。
-- `scripts/install-mt76.sh` 支持 `MT76_VERIFY_ONLY=true`（只体检不写文件）与
-  `MT76_REQUIRED_PATCHES`（自定义必选补丁清单）。
-
-### WiFi patch 到底有没有加载？—— 四步自检
-
-补丁"复制进 `package/kernel/mt76/patches/`"不等于"编出来的 WiFi 会卸载到 NPU"。
-生效要同时满足四件事，**step 9.2（Verify WiFi NPU offload）**在编译前逐项检查并打到日志/摘要：
-
-| # | 环节 | 在哪 | 不满足的后果 |
-|---|---|---|---|
-| 1 | `CONFIG_MT76_NPU` / `CONFIG_MT7915_NPU` 宏 | `mt76/Makefile` 按 subtarget 判断 | mt76 压根不编 NPU 代码 |
-| 2 | `113` 补丁被 quilt 应用 | `package/kernel/mt76/patches/` | 无 vendor 改写，走软件转发 |
-| 3 | 内核 `NET_AIROHA_NPU` | 内核 config | 113 的 Kconfig depends 不满足 |
-| 4 | DTS 保留内存区（pkt / tx-pkt / tx-bufid / ba） | `npu_wlan_mem` + `apply-npu-dts.sh` | `airoha_npu_wlan_init_memory()` 初始化失败 |
-
-怎么确认：
-
-- 编译日志搜 `Applying patches to mt76` 与 `113-mt7915`，看是否 `Patch applied`；
-- 编译日志看 step 4.6 输出的「✅ NPU 开关覆盖 an7581 / an7583」；
-- 编译日志看 step 9.2 的汇总表（也在 Actions 的 Job Summary 里）；
-- 刷机后：`dmesg | grep -i npu` 看 NPU 是否 probe 成功，
-  LuCI「Airoha SoC 状态页」看 NPU 卸载 / PPE 流表是否有流量。
-
-> `patches/` 三个子目录（ponwrt / kernel / clanker）目前**都是空的**（各一个 `.gitkeep`），
-> 所以「自定义补丁」层面没有 WiFi 补丁 —— WiFi 的 NPU 补丁全部在仓库根目录的 `mt76/patches/`，
-> 走 step 4.6 整包替换，不经过 `patches/`。
 
 ## 工具链缓存机制
 

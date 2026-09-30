@@ -413,19 +413,7 @@ NOSTDINC_FLAGS := \
 	-include backport/autoconf.h \
 	-include backport/backport.h
 
-# ------------------------------------------------------------------
-# WiFi NPU 卸载（Airoha AN758x）
-#
-#   CONFIG_MT76_NPU    = mt76 核心的 NPU 抽象层（113 补丁里的 npu.c / mt76.h）
-#   CONFIG_MT7915_NPU  = mt7915/mt7916 侧的 vendor 改写（113 补丁里的
-#                        mt7915/npu.c，MT7916D = 14c3:7906 走这个驱动）
-#
-#   AN7581 与 AN7583 都带 NPU，两个 subtarget 都要开。
-#   原先只判断 CONFIG_TARGET_airoha_an7581，导致 AN7583 机型
-#   （nokia_xg-040g-mf / -mf-ubi，configs/an7583.config 里
-#   CONFIG_PACKAGE_kmod-mt7915e=y）编出来的 WiFi 完全没有 NPU 卸载。
-# ------------------------------------------------------------------
-ifneq ($(CONFIG_TARGET_airoha_an7581)$(CONFIG_TARGET_airoha_an7583),)
+ifdef CONFIG_TARGET_airoha_an7581
   PKG_MAKE_FLAGS += CONFIG_MT76_NPU=y
   PKG_MAKE_FLAGS += CONFIG_MT7915_NPU=y
   NOSTDINC_FLAGS += -DCONFIG_MT76_NPU
@@ -523,7 +511,7 @@ ifdef CONFIG_PACKAGE_kmod-mt7921e
 endif
 ifdef CONFIG_PACKAGE_kmod-mt7996e
   PKG_MAKE_FLAGS += CONFIG_MT7996E=m
-  ifneq ($(CONFIG_TARGET_airoha_an7581)$(CONFIG_TARGET_airoha_an7583),)
+  ifdef CONFIG_TARGET_airoha_an7581
     PKG_MAKE_FLAGS += CONFIG_MT76_NPU=y
     PKG_MAKE_FLAGS += CONFIG_MT7996_NPU=y
     NOSTDINC_FLAGS += -DCONFIG_MT76_NPU

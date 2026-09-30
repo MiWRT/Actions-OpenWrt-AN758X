@@ -1,15 +1,10 @@
 #!/bin/bash
 # ================================================================
-# diy-part1.sh —— 两件事：
-#   1) 拉取可选插件到 package/custom
-#   2) 给机型 DTS 补 NPU WiFi 卸载保留内存区（见文件末尾）
+# diy-part1.sh —— 只做一件事：拉取可选插件到 package/custom
 # 运行目录: ponwrt 源码根目录（feeds 安装之后、加载 .config 之前）
 #
 # 用法：把需要的插件开关改成 true，再到 configs/<机型>.config 里
 #       把对应 "# CONFIG_PACKAGE_xxx is not set" 改成 "=y"
-#
-# 本步是 step 5，无条件执行。SOC / PROFILE / NPU_WIFI / NPU_FW_PREFIX /
-# NPU_WLAN_MEM 均为 workflow 级 env，会自动注入每个 step 的 shell 环境。
 # ================================================================
 
 echo "=========================================="
@@ -43,11 +38,6 @@ ADD_LUCI_APP=true       # qwe3017/luci-app 仓库（monorepo）
 clone() {  # clone <url> <dir> [branch]
   local url="$1" dir="$2" br="$3"
   [ -d "$dir" ] && { echo "已存在，跳过: $dir"; return 0; }
-  # 自建 runner / 国内网络：GH_PROXY=true 时走 gh-proxy.com 镜像
-  # （由 workflow 的 gh_proxy 输入项传入，GitHub 官方 runner 保持 false 即可）
-  if [ "${GH_PROXY:-false}" = "true" ]; then
-    url="https://gh-proxy.com/${url}"
-  fi
   echo "--- git clone $url -> $dir ---"
   if [ -n "$br" ]; then
     git clone --depth 1 -b "$br" "$url" "$dir" 2>&1 | tail -3
@@ -138,8 +128,7 @@ if [ "$ADD_AIROHA_NPU" = "true" ]; then
   PODIR="$PKG_DIR/luci-app-airoha-npu/po"
   if [ -f "$PODIR/zh_Hans/luci-app-airoha-npu.po" ]; then
     # 确保 Language 头是 zh_Hans（上游头部缺该字段时 po2lmo 可能识别异常）
-    # . 匹配行首那个前导字符，等价于写死那个符号，免得引号嵌套出问题
-    grep -q '^.Language:' "$PODIR/zh_Hans/luci-app-airoha-npu.po" || \
+    grep -q '^"Language:' "$PODIR/zh_Hans/luci-app-airoha-npu.po" || \
       sed -i 's/^msgstr ""$/msgstr ""\n"Language: zh_Hans\\n"/' "$PODIR/zh_Hans/luci-app-airoha-npu.po"
     mv "$PODIR/zh_Hans/luci-app-airoha-npu.po" "$PODIR/zh_Hans/airoha-npu.po"
     echo "✅ po 改名: luci-app-airoha-npu.po -> airoha-npu.po（luci.mk 按 LUCI_BASENAME 查找）"
@@ -296,41 +285,6 @@ if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
   fi
 else
   echo "未启用任何第三方插件"
-fi
-
-# ---------------------------------------------------------
-# NPU WiFi 卸载：给机型 DTS 补保留内存区
-#
-# 为什么放这里：这步跟「NPU 固件从哪来」无关，只跟 WiFi 卸载有关。
-#   airoha_npu 驱动的 airoha_npu_wlan_init_memory() 按名字找
-#   pkt / tx-pkt / tx-bufid / ba 四块 reserved-memory，
-#   缺一块 WiFi 卸载初始化就失败 —— 用 stock 固件的 MT7916 机型同样需要。
-#
-#   原先挂在 step 5.5（Build NPU firmware）里，而那一步带
-#     if: env.NPU_FW == 'clanker'
-#   于是 npu_fw=stock（默认）时 npu_wlan_mem 形同虚设：选项勾了、
-#   DTS 却一行没改。这里改为由 npu_wlan_mem 单独控制，与固件解耦。
-#
-#   step 5.5 里那份调用原样保留：脚本检测到 dtsi 已被 include 会自行跳过，
-#   两条路径不会重复插入。
-# ---------------------------------------------------------
-P1_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NPU_DTS_SH="$P1_DIR/scripts/apply-npu-dts.sh"
-
-if [ "${NPU_WLAN_MEM:-true}" != "true" ]; then
-  echo ">>> npu_wlan_mem=false，跳过 NPU DTS 修改"
-elif [ ! -f "$NPU_DTS_SH" ]; then
-  echo "::warning::找不到 scripts/apply-npu-dts.sh，跳过 DTS 内存区补充"
-  echo "::warning::npu_wlan_mem=true 但没生效，WiFi NPU 卸载将无法初始化"
-else
-  echo "--- NPU WiFi 卸载：补 DTS 保留内存区 (npu_wlan_mem=true) ---"
-  echo "    SoC=${SOC:-an7581} / profile=${PROFILE:-未指定} / wifi=${NPU_WIFI:-MT7916}"
-  SOC="${SOC:-an7581}" PROFILE="${PROFILE:-}" WIFI="${NPU_WIFI:-MT7916}" \
-  FW_PREFIX="${NPU_FW_PREFIX:-}" ADD_WLAN_MEM="true" PONWRT_DIR="$PWD" \
-    bash "$NPU_DTS_SH" || {
-      echo "::error::apply-npu-dts.sh 执行失败，WiFi NPU 卸载内存区未补上"
-      exit 1
-    }
 fi
 
 echo "🎉 diy-part1.sh 执行完毕"
