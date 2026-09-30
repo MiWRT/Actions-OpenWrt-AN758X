@@ -273,7 +273,87 @@ git add mt76 && git commit -m "mt76: sync" && git push
 | `远端拉取失败，已回退到随仓库携带的 mt76` | 远端仓库/分支写错或网络问题；已自动用 vendored 兜底 |
 | 编译报 `mt7915_npu_hw_init` 未定义 | Makefile 与补丁不配套（只换了补丁）。必须成套替换 |
 | 补丁打不上（quilt 失败） | `PKG_SOURCE_VERSION` 与补丁不匹配。确认 Makefile 与补丁来自同一套 |
+| `diy-part1.sh: cannot execute: required file not found`（exit 127） | **CRLF 行尾**。shebang 变成 `#!/bin/bash\r`，Linux 找不到该解释器。见 [4.1](#41-crlf-行尾问题必须在 windows 提交前处理) |
 | WiFi 起来了但 NPU 没卸载 | 检查 DTS 保留内存区（`npu_wlan_mem=true`）、NPU 固件变体（kite/eagle）、`dmesg \| grep -i npu` |
+| `make menuconfig` 取值异常 / `.config` 里出现 `y^M` | 同上，`.config` 被 CRLF 污染 |
+
+### 4.1 CRLF 行尾问题（必须在 Windows 提交前处理）
+
+#### 症状
+
+```
+/home/runner/work/_temp/xxxx.sh: line 3:
+  /home/runner/work/<repo>/<repo>/diy-part1.sh: cannot execute: required file not found
+Error: Process completed with exit code 127.
+```
+
+#### 根因
+
+`file not found` 指的不是 `diy-part1.sh`（`chmod +x` 已经成功，文件确实在），
+而是它**第一行 shebang 指定的解释器**：
+
+```sh
+#!/bin/bash\r          # ← 末尾多了一个 CR，Linux 去找 "/bin/bash\r" 这个不存在的路径
+```
+
+Windows 上 `git config core.autocrlf` 为 `true` 时，检出会把 LF 全转成 CRLF；
+若这些文件被直接提交/打包发走，GitHub 上的 blob 就是 CRLF，runner 上必然炸。
+
+#### 为什么只有 `diy-part1.sh` 报错
+
+本流程里两类调用方式混用：
+
+| 调用方式 | 是否受 shebang 影响 | 涉及脚本 |
+|---|---|---|
+| `"$GITHUB_WORKSPACE/$DIY_P1_SH"`（直接 exec） | **是** → exit 127 | `diy-part1.sh`、`diy-part2.sh` |
+| `bash "$REPO_DIR/scripts/xxx.sh"` | 否（显式指定解释器） | `sync-mt76.sh`、`build-npu-fw.sh`、`apply-npu-dts.sh` |
+
+所以这是一部分脚本「侥幸没炸」，并不代表问题只存在于 `diy-part1.sh`。
+
+#### 除了 exit 127，CRLF 还有两个隐蔽后果
+
+1. **`.config` 全部带 CR** → kconfig 读到的值是 `y\r`，配置不生效或不识别。
+   本仓库 13 个 `configs/*.config` 全部受影响。
+2. **`.patch` 全部带 CR** → `quilt` / `git apply` 上下文不匹配，补丁打不上。
+   `mt76/patches/*.patch`（含 113 号 NPU 补丁）全部受影响。
+
+这三个是同一根因，只修 shebang 会漏掉后两个。
+
+#### 已采取的三层防护
+
+1. **发货内容全部规范化为 LF** —— 本 zip 内所有文本文件均为 LF（已校验 0 个 CR）。
+2. **`.gitattributes`** —— `* text=auto eol=lf`，强制检出写 LF。
+   即使本地 `core.autocrlf=true` 也不会再污染。
+3. **workflow 内自愈步骤** —— `Checkout` 之后立即执行 `Normalize line endings (CRLF -> LF)`：
+   剥掉所有文本文件的 CR、重设可执行位、并对 shebang 做兜底体检。
+   即使将来有人提交了 CRLF，也只是产生一条 `::warning::`，不会中断构建。
+
+#### 如果你本地仓库已经被污染
+
+```bash
+# 0) 确认现状
+file diy-part1.sh            # 出现 "CRLF line terminators" 即已污染
+
+# 1) 一次性重规范化（依赖 .gitattributes，务必先把它提交进来）
+git add .gitattributes
+git add --renormalize .
+git status                   # 应看到大量文件被 restage
+
+# 2) 提交
+git commit -m "fix: normalize line endings to LF"
+
+# 3) 建议同时关掉本机自动转换（全局或本仓库二选一）
+git config --global core.autocrlf false
+# 或：git config core.autocrlf false   （仅本仓库）
+
+# 4) 验证：检出后应全是 LF
+file diy-part1.sh configs/an7581.config mt76/patches/*.patch
+```
+
+> `core.autocrlf=false` 只影响以后的转换，不会动已入库的 blob；
+> 已污染的历史 blob 必须靠第 1 步的 `--renormalize` 修正。
+
+---
 
 刷完验证：
 

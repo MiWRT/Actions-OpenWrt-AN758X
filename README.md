@@ -17,8 +17,14 @@ configs/        每机型一份精简 diffconfig（约 440 行，需 make defcon
 files/          自定义 rootfs 文件，会自动拷进源码（sbin/tempinfo + 两个 uci-defaults））
 scripts/        NPU 固件现编脚本（build-npu-fw.sh / apply-npu-dts.sh）
                 mt76 同步脚本（sync-mt76.sh / fetch-mt76-local.sh）
+.gitattributes  强制全库 LF 行尾（详见 README-mt76.md 4.1）
 files/lib/firmware/airoha/   ClankerNPU 编译产物落点，会覆盖进 rootfs（构建时生成，不入库）
 ```
+
+> ⚠️ **Windows 用户必读**：`core.autocrlf=true` 会让 `.sh` 的 shebang 变成
+> `#!/bin/bash\r`，CI 上直接 `cannot execute: required file not found`（exit 127）。
+> 已由 `.gitattributes` + workflow 内 `Normalize line endings` 步骤双重防护，
+> 详见 [README-mt76.md 4.1](README-mt76.md#41-crlf-行尾问题必须在-windows-提交前处理)。
 
 ## mt76 无线驱动覆盖
 
