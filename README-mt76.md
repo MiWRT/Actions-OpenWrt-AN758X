@@ -738,3 +738,66 @@ case 3:  if (msg[1] > 9)  return wifi_mail_exceed(msg, 3);  /* GET_WAIT */
 - `CTRL3=0x3` = DONE=1 + STATUS=ERROR：说明**固件有应答**，只是拒绝了这条命令
   → 往"命令不支持/越界"方向查，不要再往"固件死了/时钟断电"方向查
 - `CTRL3=0x1` = WAIT_RSP=1 + DONE=0：事务发出去但永不被完成 → 已被 wedge
+
+---
+
+## mt7915_net_fill_forward_path 从未注册（WiFi 卸载最后一环）
+
+### 现象
+
+`ppe/bind` 里只有**有线口之间**的 BND（lan1↔lan4），无线客户端的流从来绑不上：
+它的 MAC 偶尔出现在学习表里（`wifi_entries=1`），但 `wifi_bind` 全程为 0。
+
+### 定位：`/proc/kallsyms` 一句话定案
+
+```
+$ grep mt7915_net_fill_forward_path /proc/kallsyms   # 本机：无输出
+$ grep mt7915_net_setup_tc          /proc/kallsyms   # 本机：ffff... t mt7915_net_setup_tc [mt7915e]
+$ cat /sys/module/mt7915e/parameters/wed_enable      # N  ← 没有 MediaTek WED
+$ cat /sys/module/mt7915e/parameters/mt7915_npu      # Y  ← NPU 路径已启用
+```
+
+113 补丁只把 `net_setup_tc` 的条件放成了
+`CONFIG_NET_MEDIATEK_SOC_WED || CONFIG_MT7915_NPU`，
+而同一处的 `.net_fill_forward_path` 仍锁在 `#ifdef CONFIG_NET_MEDIATEK_SOC_WED` 里。
+本机没有 WED，所以这个钩子**根本没被编译进 mt7915e**。
+
+### 为什么这一环致命
+
+`airoha_ppe_foe_entry_prepare()` 里，出接口是 WiFi netdev 时必须靠
+`airoha_ppe_get_wdma_info()` 拿到 `band/bss/wcid`：
+
+```c
+if (!airoha_ppe_get_wdma_info(netdev, data->eth.h_dest, &info)) {
+        val   |= NBQ(info.idx) | PSE_PORT(FE_PSE_PORT_CDM4);
+        qdata |= ACTDP(info.bss);
+        wlan_etype = WDMA_BAND(info.idx) | WDMA_WCID(info.wcid);
+} else {
+        if (!airoha_is_valid_gdm_dev(eth, dev))
+                return -EINVAL;          /* WiFi / br-* 出口全栽在这里 */
+}
+```
+
+而 `airoha_ppe_get_wdma_info()` 走 `dev_fill_forward_path()`，要求路径末端是
+`DEV_PATH_MTK_WDMA` —— 这个节点只能由无线驱动的 `net_fill_forward_path` 产生。
+钩子缺失 ⇒ `-EINVAL` ⇒ WiFi 出接口的流一条都建不出来。
+
+（顺带确认了另一侧是齐的：`dev_fill_forward_path` 和 mac80211 的
+`ieee80211_netdev_fill_forward_path` 都在内核里，桥接流也会写 `wlan_etype`，
+`airoha_ppe_foe_entry_prepare()` 第 469 行那个赋值在 type switch 之后统一生效。）
+
+### 修复
+
+- 两个钩子统一在 `CONFIG_NET_MEDIATEK_SOC_WED || CONFIG_MT7915_NPU` 下编译
+- NPU 分支用 `mt76_npu_bound()` 替代 `mtk_wed_device_active()` 作为判据
+- `wdma_idx` 填 `phy->mt76->band_idx`：airoha 把同一个 idx 同时用作 `NBQ`
+  和 `WDMA_BAND`，而固件 `pkt_forward(buf, len, wcid, amsdu, band, ...)`
+  就是按 `band`（0/1）取环基址的
+- `wcid` 一律填真实值。`0x3ff` 是留给"WiFi 硬件自己解析"的新款 MKROM 组合的，
+  NPU 侧必须用它从 `mt7915_npu_wcid_sync()` 同步过的那个 wcid
+- 加一条 ratelimited 打印，用来区分"根本没走到钩子"和"走了但 PPE 仍拒绝"
+
+### 验证要点（重要）
+
+**手机必须亮屏/有流量时才能测。** 休眠的手机不回 ICMP，就没有双向流量、
+不会产生 established 流，表自然是空的——这跟钩子没修是两回事，别混为一谈。
