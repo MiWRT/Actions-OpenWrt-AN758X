@@ -28,7 +28,7 @@ diff --git a/mt7915/npu.c b/mt7915/npu.c
 index 1111111..2222222 100644
 --- a/mt7915/npu.c
 +++ b/mt7915/npu.c
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,176 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * MT7915/MT7916 Airoha NPU offload - vendor-protocol rewrite
@@ -64,8 +64,14 @@ index 1111111..2222222 100644
 +
 +	npu = rcu_dereference_protected(dev->mt76.mmio.npu,
 +					&dev->mt76.mutex);
-+	if (!npu)
++	if (!npu) {
++		/* mt76_npu_init() 失败了（见 114 补丁打的日志），这里原本静默返回 0，
++		 * 于是 dmesg 里连一行 NPU 相关的东西都没有，WiFi 也能照常起来。 */
++		dev_info(dev->mt76.dev,
++			 "NPU offload disabled: npu handle is NULL "
++			 "(mt76_npu_init failed)\n");
 +		return 0;
++	}
 +
 +#if NPU_DP_STEP >= 1
 +	err = mt76_npu_send_msg(npu, 0, WLAN_FUNC_SET_WAIT_DRIVER_MODEL, 2,

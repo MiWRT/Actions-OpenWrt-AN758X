@@ -1,0 +1,7 @@
+# mt76 本机拉取的临时目录（DRY_RUN 产物）
+.mt76-fetch/
+# mt76 同步元信息（构建时生成）
+.mt76-sync.env
+# NPU 固件构建产物（不入库）
+.clanker-build/
+files/lib/firmware/airoha/

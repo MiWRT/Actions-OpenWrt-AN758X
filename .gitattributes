@@ -1,0 +1,36 @@
+# OpenWrt 构建链（kconfig / quilt / make / shell）一律只接受 LF 行尾。
+# 背景：Windows 上 core.autocrlf=true 会让 .sh 的 shebang 变成 "#!/bin/bash\r"，
+#       Linux runner 找不到该解释器，直接 exit 127
+#       （cannot execute: required file not found）。
+#       .config 带 CR 会让取值变成 "y\r"，.patch 带 CR 会让 quilt 打不上。
+#
+# eol=lf 会强制检出时写 LF —— 即便本地 core.autocrlf=true 也不会被污染。
+* text=auto eol=lf
+
+# 显式声明文本类型，防止 git 把它们误判为二进制
+*.sh            text eol=lf
+*.config        text eol=lf
+*.patch         text eol=lf
+*.diff          text eol=lf
+*.mk            text eol=lf
+Makefile        text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.md            text eol=lf
+*.gitignore     text eol=lf
+tempinfo        text eol=lf
+*-wifi-5g-cn    text eol=lf
+*-tempinfo-perm text eol=lf
+
+# 二进制
+*.zip   binary
+*.gz    binary
+*.xz    binary
+*.bz2   binary
+*.bin   binary
+*.dtb   binary
+*.ipk   binary
+*.apk   binary
+*.png   binary
+*.jpg   binary
+*.ico   binary

@@ -355,6 +355,113 @@ file diy-part1.sh configs/an7581.config mt76/patches/*.patch
 
 ---
 
+### 4.2 WiFi 起来了但 NPU 没有卸载（静默失效）
+
+这是本次集成最容易被误判的场景：**WiFi 一切正常，但 NPU 卸载完全没生效，且 dmesg 里一个字都没有。**
+
+#### 现象
+
+```sh
+$ dmesg | grep -i npu
+[    0.000000] OF: reserved mem: ... npu-binary@84000000
+[    0.000000] OF: reserved mem: ... npu-pkt@81000000
+...（只有 reserved memory，没有任何驱动侧初始化日志）
+
+$ cat /sys/module/mt7915e/parameters/mt7915_npu
+Y
+$ cat /sys/firmware/devicetree/base/soc/npu@1e900000/status
+okay
+$ ls -l /lib/firmware/airoha/
+en7581_npu_data.bin / en7581_npu_rv32.bin        # 固件在
+```
+
+看起来什么都对，但 NPU 就是没工作。
+
+#### 排除干扰项：`input device check on` 是假阳性
+
+`dmesg | grep -i npu` 匹配到的 `input device check on` 里 "npu" 是 `i-n-p-u-t` 的子串，与 NPU 无关。
+
+#### 确定失败点：两条 hard evidence
+
+`mt7915/npu.c` 的 `mt7915_npu_hw_init()` 一旦拿到 `npu` 句柄，`NPU_DP_STEP >= 1` 段必定产生以下两条之一：
+
+```c
+dev_warn(..., "NPU set driver model failed %d\n", err);   /* mt76_npu_send_msg 失败 */
+dev_info(..., "NPU version: %d.%d\n", ...);               /* 成功拿到版本号 */
+```
+
+**两条都没出现 ⇒ 函数在第一段就早退了 ⇒ `dev->mt76.mmio.npu == NULL`。**
+
+又因 `mt7915.h` 里没有给 `mt7915_npu_hw_init()` 写 `#else` 桩函数（`mt7915_npu` 参数虽存在，但它是
+113 在 `pci.c` **无条件**注册的，不能作为 `CONFIG_MT7915_NPU` 是否开启的依据），
+而其馀编译/加载路径若无 NPU 会直接链接失败——模块既然已加载，
+就证明 `CONFIG_MT7915_NPU` 必然为真、该调用必然执行过。
+
+结论：**`mt76_npu_init()` 返回了错误码**，三个出口之一失败：
+
+| 出口 | 调用 | 典型原因 |
+|---|---|---|
+| `error_unlock` | `airoha_npu_get()` | NPU platform 驱动没 probe 完成（`-EPROBE_DEFER`） |
+| `error_npu_put` | `airoha_ppe_get_dev()` | PPE 设备未就绪 |
+| `error_ppe_put` | `airoha_npu_wlan_init_reserved_memory()` | DTS 的 `memory-region-names` 不齐（需 `binary`/`pkt`/`tx-pkt`/`tx-bufid`/`ba`） |
+
+#### 为什么原来查不出来
+
+`mt76_npu_init()` 的三个失败出口全是 `goto` + `return err`，**没有一条 `dev_err`**；
+而调用方 `mt7915/pci.c` 又直接忽略了返回值：
+
+```c
+if (mt7915_npu)
+    mt76_npu_init(&dev->mt76, pci_resource_start(pdev, 0),
+                  id->device == 0x7906 ? 2 : 3);      /* 返回值丢弃 */
+```
+
+`mt7915_npu_hw_init()` 里拿到 NULL 也是 `return 0` 静默返回。整条链路做不到"失败可见"。
+
+#### 修复：新增 114 号诊断补丁
+
+`mt76/patches/114-mt76-npu-debug-log.patch` 给上述每个出口补上 `dev_err`（带错误码），
+并在绑定成功时补一条 `dev_info`；同时把 113 里 `mt7915_npu_hw_init()` 的 NULL 早退
+从静默 `return 0` 改成可读的 `dev_info`。
+
+重编后：
+
+```sh
+dmesg | grep -i npu
+# 成功：
+#   mt7915e 0001:01:00.0: NPU bound: type=3 phy=0x... hwrro=... token=...
+#   mt7915e 0001:01:00.0: NPU version: 1.2
+# 失败（会明确告诉你卡在哪步）：
+#   mt7915e 0001:01:00.0: NPU bind failed: airoha_npu_get() err=-517 (找不到 NPU 设备，或其 platform 驱动尚未 probe 完成)
+#   mt7915e 0001:01:00.0: NPU offload disabled: npu handle is NULL (mt76_npu_init failed)
+```
+
+> 114 是**纯诊断**补丁，不改任何行为，可随时删除。
+> 它不在 `sync-mt76.sh` 的必选清单里（`100/110/113` 才必选），
+> 但 `sync-mt76.sh` 是整目录替换，会自动一起拷进去。
+
+#### 不用重编就能先确认的事
+
+```sh
+# 1) NPU platform 设备到底有没有绑定到驱动？（最可能是这一步）
+ls /sys/bus/platform/drivers/airoha-npu/          # 应出现 1e900000.npu
+ls /sys/bus/platform/devices/ | grep npu
+
+# 2) 完整启动日志里有没有 NPU firmware 版本行（118 号补丁专门加的）
+dmesg | grep -i "npu fw version"
+
+# 3) mt7915e.ko 里 NPU 代码是否真的编译进去了
+find /lib/modules -name mt7915e.ko -exec strings {} \; | grep -i "NPU version\|set driver model"
+
+# 4) 完整 npu 相关日志，别只看 tail
+dmesg | grep -iE "airoha-npu|npu bind|npu offload|reserved memory"
+```
+
+第 1 条若 `/sys/bus/platform/drivers/airoha-npu/` 下没有 `1e900000.npu`，
+就是 NPU 平台设备未 probe —— 后续 `airoha_npu_get()` 必然返回 `-EPROBE_DEFER`(-517)。
+
+---
+
 刷完验证：
 
 ```sh
