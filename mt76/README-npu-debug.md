@@ -18,7 +18,7 @@ quilt 的 series，随后 quilt 尝试逐个应用。Markdown 文档自然 "can'
 `Compile the firmware` 步骤直接 exit 1，且要跑满几十分钟才暴露。
 
 **本仓库故意不提供 `patches/series`**：OpenWrt 在有 series 时会先 `cp series` 再追加一遍列表，
-导致 series 里每个补丁重复出现两次。所以保持“无 series、全目录即补丁”的原始约定，
+导致 series 里每个补丁重复出现两次。所以保持 "无 series、全目录即补丁" 的原始约定，
 只要确保 `mt76/patches/` 下只有真正的补丁文件即可。
 
 > 排查 CI 失败时先看这个：
