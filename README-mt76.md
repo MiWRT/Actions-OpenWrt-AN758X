@@ -593,3 +593,78 @@ bash scripts/install-kernel-patches.sh "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/
 其中只有 121 动过 `init_memory`，且插在 `TX_BUF_CHECK_ADDR` **之后**。
 924 / 926 只改 `send_msg` 和 `probe`（行 23、160-213、499、772），
 与 950 的上下文（539 附近）不重叠，行号偏移不影响匹配。
+
+---
+
+## 10. 第二层问题：绑定成功后固件不再响应 mailbox
+
+绑上之后以为成了，结果一连客户端就暴露出第二层问题：
+
+```
+NPU wcid_sync entry: band=1 wcid=3
+NPU sta sync: band=1 wcid=3
+airoha-npu 1e900000.npu: mailbox function 0 timed out
+NPU sta sync: band=1 wcid=3 ret=-110      ← 超时，不是拒绝
+```
+
+### 实测取证
+
+| 检查 | 结果 | 含义 |
+|---|---|---|
+| `/proc/interrupts` 中 `airoha-npu-mbox` | **0 次** | 固件从未给主机发中断 |
+| `devmem 0x1ec0c03c` (CTRL3) | `0x1` | WAIT_RSP=1、**DONE=0**，固件没完成事务 |
+| 手动构造 cmd=6 触发（序号 +1，等 2 s） | CTRL3 仍 `0x1` | 固件**完全不响应** |
+| `rmmod mt7915e && modprobe mt7915e` | `NPU offload disabled: npu handle is NULL` | 连 init_memory 都失败 → 固件此后一直沉默 |
+| `clk_summary` 的 `npu` | enable=Y, 800 MHz | 时钟开着，排除时钟/电源门控 |
+
+即：**固件在首次 init 之后就不再响应 mailbox**，寄存器仍可读写（总线在），但固件 core 没在干活。
+
+### 为什么怀疑是命令 32 干的
+
+时间线对得上：
+
+1. `init_memory` 发 BAND0_ONCPU → 成功
+2. 发 **TX_BUF_CHECK_ADDR(32)** → 固件回 STATUS=ERROR
+3. 发 PKT / TX_PKT / BA / IS_FORCE_TO_CPU → 都成功（所以此时固件还活着）
+4. 绑定成功
+5. 之后任何命令 → 全部超时
+
+固件源码 `npu_wifi.c` 里：
+
+```c
+case 1:  /* SET_WAIT */
+    if (msg[1] > 30)
+        return wifi_mail_exceed(msg, 1);   /* 返回 0 -> STATUS=ERROR */
+```
+
+两个变体（Kite / Eagle）的 `set_wait_func_table` **都是 `[31]`**，
+没有任何变体支持命令 32。`wifi_mail_exceed` 这条异常返回路径很可能
+没清中断/状态标志，把固件的 mailbox 状态机留在了卡住的状态。
+
+**所以上一版"发送后忽略 -EINVAL"是不够的** —— 错误是忽略了，
+但命令已经发出去，固件已经被带偏。改成**根本不发**。
+
+### 补丁 v2 的两处改动
+
+- 把 `TX_BUF_CHECK_ADDR` 的发送整块删除（保留注释说明理由）
+- `init_memory()` 末尾加一次 `WLAN_FUNC_GET_WAIT_NPU_VERSION` 探测并
+  `dev_info` 打印结果 —— 用来从 dmesg 直接区分
+  "初始化后固件还活着"（ret=0）和 "固件已经沉默"（ret=-110）
+
+刷机后看这条日志即可判断：
+
+```
+airoha-npu 1e900000.npu: NPU post-init check: version query ret=0 ver=0x...
+```
+
+- `ret=0` → 固件活着，接下来看 `NPU sta sync ... ret=0` 有没有出现
+- `ret=-110` → 固件在 init 后就不响应了，得换固件（不是驱动能救的）
+
+### 排查手法备忘
+
+- **手动触发 mailbox**（判断固件死活）：写 `CTRL(0)` 指向的 DMA 缓冲
+  3 个 u32（ifindex/type、func_id、payload），写 `CTRL(1)=0xC`，
+  **`CTRL(2)` 必须比当前值大 1**（序号倒退固件会直接忽略，这点踩过坑），
+  再写 `CTRL(3)=0x1` 触发，然后读 `CTRL(3)` 看 DONE(bit1) 是否置起。
+- `MT7916` 上 `hwrro=0 token=0` 正常；`mt76_npu_device_active()` 返回
+  false 也是设计如此（见第 9 章），不要当故障查。

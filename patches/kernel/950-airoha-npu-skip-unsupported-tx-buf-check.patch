@@ -1,38 +1,78 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-Subject: [PATCH] net: airoha: npu: do not fail NPU bind on unsupported
- TX_BUF_CHECK_ADDR
+Subject: [PATCH] net: airoha: npu: never send TX_BUF_CHECK_ADDR, and probe
+ firmware liveness after init
 
-The kernel enum airoha_npu_wlan_set_cmd has 34 entries (0..33), but the NPU
-firmware SET_WAIT command table has only 31 (0..30) and rejects 30..33 with
-mailbox status ERROR, which airoha_npu_send_msg() translates to -EINVAL.
+The kernel enum airoha_npu_wlan_set_cmd has 34 entries (0..33) while the
+NPU firmware SET_WAIT command table has only 31 (0..30) in both the Kite
+and Eagle variants.  Command 32 (TX_BUF_CHECK_ADDR) is therefore rejected
+with mailbox status ERROR.
 
-airoha_npu_wlan_init_memory() sends WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR (32)
-to publish the tx-bufid reserved-memory region.  With firmware that does not
-implement it the whole sequence aborts, mt76_npu_init() returns -22 and Wi-Fi
-NPU offload stays disabled while Wi-Fi itself comes up normally, so the
-failure is invisible unless the error path is traced.
+Ignoring the -EINVAL (previous approach) lets the bind succeed, but the
+firmware then stops completing mailbox transactions entirely: the
+MacTable DEL_STA sent on station association times out with -ETIMEDOUT,
+so Wi-Fi offload still never works.  Reloading mt7915e afterwards makes
+even airoha_npu_wlan_init_memory() fail, i.e. the firmware stays silent
+once it has seen the out-of-range command.
 
-Treat -EINVAL from this specific command as non-fatal: firmware images that
-reject it have no handler for it and never use the tx-bufid region.  Any other
-error (and the errors of all remaining commands) still aborts the bind.
+Do not send the command at all.  The firmware has no handler for it and
+never uses the tx-bufid region.
+
+Also add a post-init probe: query WLAN_FUNC_GET_WAIT_NPU_VERSION right
+after init and log the result, so "firmware alive after init" can be told
+apart from "firmware silent" from dmesg alone.
+
+---
+ drivers/net/ethernet/airoha/airoha_npu.c | 33 ++++++++++++++++++++++--
+ 1 file changed, 29 insertions(+), 4 deletions(-)
+
 --- a/drivers/net/ethernet/airoha/airoha_npu.c
 +++ b/drivers/net/ethernet/airoha/airoha_npu.c
-@@ -539,8 +539,18 @@
+@@ -539,10 +539,15 @@
  	if (err)
  		return err;
  
- 	cmd = WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR;
- 	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "tx-bufid", cmd);
-+	/* NPU firmware images whose SET_WAIT command table holds only 31 entries
-+	 * (0..30) do not implement WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR (32):
-+	 * they finish the mailbox transaction with status ERROR, which
-+	 * airoha_npu_send_msg() reports as -EINVAL.  Those images never use the
-+	 * tx-bufid region, so do not abort the whole NPU bind because of it.
+-	cmd = WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR;
+-	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "tx-bufid", cmd);
+-	if (err)
+-		return err;
++	/* WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR (32) is past the end of the
++	 * NPU firmware SET_WAIT command table, which holds 31 entries (0..30)
++	 * in both the Kite and Eagle firmware variants.  The firmware answers
++	 * the command with mailbox status ERROR and then stops completing
++	 * mailbox transactions altogether: every later command -- e.g. the
++	 * MacTable DEL_STA issued when a station associates -- times out with
++	 * -ETIMEDOUT and Wi-Fi offload never works.  Never send it: the
++	 * firmware has no handler for it and never uses the tx-bufid region.
 +	 */
-+	if (err == -EINVAL) {
-+		dev_warn(npu->dev, "TX_BUF_CHECK_ADDR unsupported by NPU fw, skipping\n");
-+		err = 0;
-+	}
- 	if (err)
- 		return err;
  
+ 	cmd = WLAN_FUNC_SET_WAIT_PKT_BUF_ADDR;
+ 	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "pkt", cmd);
+@@ -567,7 +567,25 @@
+ 			return err;
+ 	}
+ 
+-	cmd = WLAN_FUNC_SET_WAIT_IS_FORCE_TO_CPU;
+-	return airoha_npu_wlan_msg_send(npu, 0, cmd, &val, sizeof(val),
+-					GFP_KERNEL);
++	cmd = WLAN_FUNC_SET_WAIT_IS_FORCE_TO_CPU;
++	err = airoha_npu_wlan_msg_send(npu, 0, cmd, &val, sizeof(val),
++				       GFP_KERNEL);
++	if (err)
++		return err;
++
++	/* Post-init sanity check: is the firmware still completing mailbox
++	 * transactions?  -ETIMEDOUT here means the firmware went silent right
++	 * after init and offload cannot work at all.
++	 */
++	{
++		u32 ver = 0;
++		int r;
++
++		r = airoha_npu_wlan_msg_get(npu, 0, WLAN_FUNC_GET_WAIT_NPU_VERSION,
++					    &ver, sizeof(ver), GFP_KERNEL);
++		dev_info(npu->dev, "NPU post-init check: version query ret=%d ver=0x%x\n",
++			 r, ver);
++	}
++
++	return 0;
+ }
