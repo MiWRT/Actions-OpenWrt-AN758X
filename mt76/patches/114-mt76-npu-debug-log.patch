@@ -42,7 +42,7 @@
 -	if (err)
 +	if (err) {
 +		dev_err(dev->dev, "NPU bind failed: reserved memory init err=%d"
-+			" (检查 DTS 的 memory-region-names 是否齐全)\n", err);
++			" (-22=固件拒绝某条 SET_WAIT 命令; -19=DTS 缺 memory-region)\n", err);
  		goto error_ppe_put;
 +	}
  

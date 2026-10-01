@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] net: airoha: npu: do not fail NPU bind on unsupported
+ TX_BUF_CHECK_ADDR
+
+The kernel enum airoha_npu_wlan_set_cmd has 34 entries (0..33), but the NPU
+firmware SET_WAIT command table has only 31 (0..30) and rejects 30..33 with
+mailbox status ERROR, which airoha_npu_send_msg() translates to -EINVAL.
+
+airoha_npu_wlan_init_memory() sends WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR (32)
+to publish the tx-bufid reserved-memory region.  With firmware that does not
+implement it the whole sequence aborts, mt76_npu_init() returns -22 and Wi-Fi
+NPU offload stays disabled while Wi-Fi itself comes up normally, so the
+failure is invisible unless the error path is traced.
+
+Treat -EINVAL from this specific command as non-fatal: firmware images that
+reject it have no handler for it and never use the tx-bufid region.  Any other
+error (and the errors of all remaining commands) still aborts the bind.
+--- a/drivers/net/ethernet/airoha/airoha_npu.c
++++ b/drivers/net/ethernet/airoha/airoha_npu.c
+@@ -539,8 +539,18 @@
+ 	if (err)
+ 		return err;
+ 
+ 	cmd = WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR;
+ 	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "tx-bufid", cmd);
++	/* NPU firmware images whose SET_WAIT command table holds only 31 entries
++	 * (0..30) do not implement WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR (32):
++	 * they finish the mailbox transaction with status ERROR, which
++	 * airoha_npu_send_msg() reports as -EINVAL.  Those images never use the
++	 * tx-bufid region, so do not abort the whole NPU bind because of it.
++	 */
++	if (err == -EINVAL) {
++		dev_warn(npu->dev, "TX_BUF_CHECK_ADDR unsupported by NPU fw, skipping\n");
++		err = 0;
++	}
+ 	if (err)
+ 		return err;
+ 

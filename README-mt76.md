@@ -469,3 +469,98 @@ dmesg | grep -i npu
 ls -l /lib/firmware/airoha/
 cat /sys/kernel/debug/ieee80211/phy0/mt76/npu   # 视内核配置而定
 ```
+
+
+---
+
+## 9. NPU 卸载不生效的根因（实测定位，非推测）
+
+### 现象
+
+打了 114 诊断补丁后 `dmesg | grep -i npu` 给出确切错误码：
+
+```
+mt7915e 0001:01:00.0: NPU bind failed: reserved memory init err=-22
+```
+
+`-22 = -EINVAL`。注意它**不是** `-110`（超时），两者含义完全不同：
+
+| errno | 含义 |
+|---|---|
+| `-110` `-ETIMEDOUT` | mailbox 发出去 100 ms 内 DONE 位没起来 → 固件没跑 |
+| `-22` `-EINVAL` | **DONE 位起来了，但 STATUS 字段是 ERROR** → 固件在线，主动拒绝 |
+
+### 定位过程（可在任意一台同型机上复现）
+
+1. **读 mailbox 控制寄存器**（NPU 基址 `0x1e900000`，mailbox 偏移 `0x30c000`）：
+
+   ```sh
+   devmem 0x1ec0c03c 32   # REG_CR_MBQ0_CTRL(3)
+   ```
+
+   位定义：`FUNC_ID[14:11]` `STATUS[4:2]` `DONE[1]` `WAIT_RSP[0]`。
+   实测 `0x00000003` → DONE=1、STATUS=0(`NPU_MBOX_ERROR`)、FUNC_ID=0(`NPU_FUNC_WIFI`)。
+   → 固件有应答，返回的是错误状态。
+
+2. **读最后一条消息的 DMA 缓冲区**。`MBQ0_CTRL(0)` 给出物理地址：
+
+   ```sh
+   devmem 0x1ec0c030 32   # 例：0x91BA9000
+   devmem 0x91ba9000 32   # 0x00000010 -> ifindex=0, func_type=1(SET)
+   devmem 0x91ba9004 32   # 0x00000020 -> func_id = 32
+   devmem 0x91ba9008 32   # 0x90C00000 -> payload = npu-txbufid 基址
+   ```
+
+   `func_id=32` 即 `WLAN_FUNC_SET_WAIT_TX_BUF_CHECK_ADDR`，
+   payload 正是 DTS 里 `npu-txbufid@90c00000` 的地址 ——
+   失败点锁定在 `airoha_npu_wlan_init_memory()` 的第 2 步（第 1 步 BAND0_ONCPU 是通过的）。
+
+### 根因：驱动与固件的命令表错位
+
+内核 `enum airoha_npu_wlan_set_cmd` 有 **34** 项（0..33），
+而 NPU 固件（ClankerNPU）的 `set_wait_func_table` 只有 **31** 项（0..30），
+`npu_wifi.c` 里明确写着：
+
+```c
+case 1:  /* SET_WAIT */
+    if (msg[1] > 30)
+        return wifi_mail_exceed(msg, 1);   /* 返回 0 -> STATUS=ERROR -> -EINVAL */
+```
+
+对齐关系：
+
+| id | 内核驱动 (6.18) | 固件表 |
+|---|---|---|
+| 0..29 | 一致 | 一致 |
+| 30 | `HWNAT_INIT` | `arht_chip_info`（会误调，但当前无人发送） |
+| 31 | `ARHT_CHIP_INFO` | — 越界 |
+| **32** | **`TX_BUF_CHECK_ADDR`** | — 越界 → **-22** |
+| 33 | `TOKEN_ID_SIZE` | — 越界（当前无人发送） |
+
+平台驱动实际只会用到 32 这一条越界命令，所以只在这里炸。
+
+### 修复
+
+`patches/kernel/950-airoha-npu-skip-unsupported-tx-buf-check.patch`（走
+`install-kernel-patches.sh` 复制进 `target/linux/airoha/patches-*/`，由 quilt 应用）。
+
+把 `TX_BUF_CHECK_ADDR` 的 `-EINVAL` 视为非致命：固件既然没有对应 handler，
+就说明它根本不使用 `tx-bufid` 这块区域，跳过不影响其余初始化。
+**其余错误码、以及后续所有命令的错误仍然照常中止绑定。**
+
+重编刷机后应看到：
+
+```
+mt7915e ...: TX_BUF_CHECK_ADDR unsupported by NPU fw, skipping
+mt7915e ...: NPU bound: type=... phy=...
+```
+
+### 附带说明
+
+- 这次 `-22` 与 DTS 无关：本机 `memory-region-names` 五项齐全
+  （`binary pkt tx-pkt tx-bufid ba`）。**用 `strings` 读该属性会被坑** ——
+  它默认跳过短字符串，`pkt`(3)、`ba`(2) 会被丢掉，看起来像只有 3 项。
+  要用 `cat ... | tr '\0' '\n'`。
+- probe 里的 `WLAN_FUNC_GET_WAIT_NPU_VERSION` 失败是**静默**的
+  （`if (!ret)` 才打印），所以 dmesg 里看不到 `NPU fw version:` 是正常的，
+  不能据此判断固件没起来 —— 要看 err 是 -22 还是 -110。
