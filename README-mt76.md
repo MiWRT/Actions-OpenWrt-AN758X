@@ -564,3 +564,32 @@ mt7915e ...: NPU bound: type=... phy=...
 - probe 里的 `WLAN_FUNC_GET_WAIT_NPU_VERSION` 失败是**静默**的
   （`if (!ret)` 才打印），所以 dmesg 里看不到 `NPU fw version:` 是正常的，
   不能据此判断固件没起来 —— 要看 err 是 -22 还是 -110。
+
+### 补丁没生效？先查有没有人调用安装脚本
+
+第一次刷完 950 之后设备上**仍然是 -22**。原因不是补丁写错，而是：
+
+> `scripts/install-kernel-patches.sh` 在仓库里存在，但**从来没有任何地方调用它**。
+
+所以 `patches/kernel/` 下的补丁一直只是躺在仓库里，压根没进编译。
+脚本不会自己跑起来 —— 仓库里有文件 ≠ 流程会用它。
+
+已在 `.github/workflows/build-ponwrt.yml` 里补了 `Install kernel patches` 步骤
+（在 `diy-part1.sh` 之后、`make defconfig` 之前），现在会显式调用：
+
+```bash
+bash scripts/install-kernel-patches.sh "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/patches/kernel"
+```
+
+⚠️ 这一步**不能**改成直接 `git apply`：此刻内核源码还没解压，
+`drivers/net/ethernet/airoha/airoha_npu.c` 不存在，只能交给 quilt 目录，
+等 kernel prepare 阶段统一打。编号用 `9xx-` 前缀（官方补丁最大到 930），
+保证排在最后应用。
+
+### 补丁上下文会不会被官方补丁顶掉
+
+不会。改动 `airoha_npu.c` 的官方补丁共 8 个
+（102-02 / 102-03 / 118 / 121 / 123 / 181 / 924 / 926），
+其中只有 121 动过 `init_memory`，且插在 `TX_BUF_CHECK_ADDR` **之后**。
+924 / 926 只改 `send_msg` 和 `probe`（行 23、160-213、499、772），
+与 950 的上下文（539 附近）不重叠，行号偏移不影响匹配。

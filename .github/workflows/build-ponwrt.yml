@@ -434,6 +434,33 @@ jobs:
         "$GITHUB_WORKSPACE/$DIY_P1_SH"
 
     # =========================================================
+    # 5.2 安装内核补丁 —— 把 patches/kernel/*.patch 复制进
+    #     target/linux/airoha/patches-<ver>/，由 quilt 在内核 prepare 阶段应用。
+    #
+    #     ⚠️ 不能在这里直接 git apply：此刻内核源码还没解压，
+    #     drivers/net/ethernet/airoha/airoha_npu.c 根本不存在，
+    #     只能交给 quilt 目录，等 kernel prepare 时统一打。
+    #
+    #     ⚠️ 为什么单独一步：scripts/install-kernel-patches.sh 在仓库里
+    #     躺了很久，但从来没有任何地方调用它 —— 于是 patches/kernel/
+    #     下的补丁（如 950）一直没进编译，设备上看到的还是未修复的行为。
+    #     必须显式调用，且必须在 make defconfig / Compile 之前。
+    #
+    #     编号用 9xx- 前缀：官方补丁最大到 930，9xx 保证排在最后应用。
+    # =========================================================
+    - name: Install kernel patches
+      run: |
+        set -euo pipefail
+        cd "$BUILD_ROOT/openwrt"
+        chmod +x "$GITHUB_WORKSPACE/scripts/"*.sh
+        bash "$GITHUB_WORKSPACE/scripts/install-kernel-patches.sh" \
+             "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/patches/kernel"
+
+        echo "===== 已就位的内核补丁 ====="
+        ls -l target/linux/airoha/patches-*/9*.patch 2>/dev/null || \
+          echo "  ⚠ 未找到 9xx 补丁"
+
+    # =========================================================
     # 5.5 编译 NPU 固件 (ClankerNPU) —— 仅在 npu_fw=clanker 时执行
     #     产物写进 CI 仓库的 files/lib/firmware/airoha/，下一步「加载 .config」
     #     会把整个 files/ 拷进源码树，最后覆盖进 rootfs。
