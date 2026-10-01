@@ -55,7 +55,7 @@ index 1111111..2222222 100644
 +#include "mt7915.h"
 +
 +/* 0=bind only 1=+driver model 2=+pcie/ba/counter 3=+ring size/base */
-+#define NPU_DP_STEP 1
++#define NPU_DP_STEP 3
 +
 +int mt7915_npu_hw_init(struct mt7915_dev *dev)
 +{
@@ -83,10 +83,10 @@ index 1111111..2222222 100644
 +	{
 +		u32 ver = 0;
 +
-+		if (!mt76_npu_get_msg(npu, 0, WLAN_FUNC_GET_WAIT_NPU_VERSION,
++		if (!mt76_npu_get_msg(npu, 0, WLAN_FUNC_GET_WAIT_NPU_INFO,
 +				      &ver, GFP_KERNEL))
-+			dev_info(dev->mt76.dev, "NPU version: %d.%d\n",
-+				 (ver >> 16) & 0xffff, ver & 0xffff);
++			dev_info(dev->mt76.dev, "NPU info: 0x%08x (maj=%d min=%d)\n",
++				 ver, (ver >> 16) & 0xffff, ver & 0xffff);
 +	}
 +#endif
 +

@@ -668,3 +668,73 @@ airoha-npu 1e900000.npu: NPU post-init check: version query ret=0 ver=0x...
   再写 `CTRL(3)=0x1` 触发，然后读 `CTRL(3)` 看 DONE(bit1) 是否置起。
 - `MT7916` 上 `hwrro=0 token=0` 正常；`mt76_npu_device_active()` 返回
   false 也是设计如此（见第 9 章），不要当故障查。
+
+
+---
+
+## 11. 真正的根因：越界命令会毒死 mailbox（且不止一条）
+
+刷入 950 v2 后仍然失败，`dmesg` 关键两行：
+
+```
+airoha-npu 1e900000.npu: NPU post-init check: version query ret=-22 ver=0x0
+mt7915e 0001:01:00.0: NPU sta sync: band=1 wcid=3 ret=-110
+```
+
+看起来像"固件 init 后就不响应"，其实是**越界命令**问题，而且 950 v1 只修了一半。
+
+### 事实：主机枚举比固件表长
+
+| 方向 | 主机枚举项数 | 固件表项数 | 有效下标 |
+|---|---|---|---|
+| SET | 34 | 31 | 0..30（31/32/33 越界）|
+| GET | 11 | 10 | 0..9（10 越界）|
+
+固件分发：
+
+```c
+case 1:  if (msg[1] > 30) return wifi_mail_exceed(msg, 1);  /* SET_WAIT */
+case 3:  if (msg[1] > 9)  return wifi_mail_exceed(msg, 3);  /* GET_WAIT */
+```
+
+`wifi_mail_exceed()` 这条异常返回路径**不清 mailbox 状态**。一旦踩到，
+之后**所有**事务都完不成：寄存器上表现为 `CTRL3=0x1`（WAIT_RSP=1, DONE=0），
+驱动侧看到的就是 `-110 ETIMEDOUT` 雪崩。
+
+### 两个越界元凶
+
+| 命令 | 下标 | 谁在用 | 状态 |
+|---|---|---|---|
+| `SET_WAIT_TX_BUF_CHECK_ADDR` | 32 | `airoha_npu_wlan_init_memory()` | 已由 950 删除 ✓ |
+| `GET_WAIT_NPU_VERSION` | **10** | 950 的探针 **和** 113 的 `mt7915_npu_hw_init()` | **本次修复** |
+
+第二条是上一轮自己埋的：950 v2 为了"探测固件死活"加了版本查询，
+而 `WLAN_FUNC_GET_WAIT_NPU_VERSION` 下标是 10 —— **探针本身就是新的楔子源**。
+所以删掉命令 32 没能让事情变好：探针紧接着又把 mailbox 打死了。
+
+> 教训：写诊断代码前必须确认它用到的命令在固件表里真的存在。
+> 一次约简名下标的 GET ≈ 一枚 mailbox 手雷。
+
+### 修复
+
+- 版本查询统一改用 `WLAN_FUNC_GET_WAIT_NPU_INFO`（下标 0，映射到
+  `wifi_mail_get_npu_info`，固件实现 `return 1` 成功）
+- 同时把 `NPU_DP_STEP` 从 `1` 提到 `3`，让 mt7915 真正把数据面配置发下去
+  （每 band 的 `PCIE_ADDR`、`DESC`、`GET RXDESC_BASE`、DBG 计数器等）。
+  这些是 NPU 知道"WiFi 的 ring 在哪"的前提，缺了它即使 sta sync 成功也卸载不了
+
+### 新增的自查脚本
+
+改任何 `WLAN_FUNC_*` 调用前先跑一遍，确认没有命令越界：
+
+```python
+# 对照 airoha_offload.h 的枚举 vs 固件表长度（SET<=30, GET<=9）
+# 脚本见仓库 README 第 11 章，或直接：
+#   SET 有效 0..30 / GET 有效 0..9，超出即越界，一定 wedge mailbox
+```
+
+### 排错手法补充
+
+- `CTRL3=0x3` = DONE=1 + STATUS=ERROR：说明**固件有应答**，只是拒绝了这条命令
+  → 往"命令不支持/越界"方向查，不要再往"固件死了/时钟断电"方向查
+- `CTRL3=0x1` = WAIT_RSP=1 + DONE=0：事务发出去但永不被完成 → 已被 wedge

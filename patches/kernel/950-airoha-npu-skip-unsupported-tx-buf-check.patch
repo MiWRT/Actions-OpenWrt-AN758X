@@ -17,7 +17,8 @@ once it has seen the out-of-range command.
 Do not send the command at all.  The firmware has no handler for it and
 never uses the tx-bufid region.
 
-Also add a post-init probe: query WLAN_FUNC_GET_WAIT_NPU_VERSION right
+Also add a post-init probe: query WLAN_FUNC_GET_WAIT_NPU_INFO (get table
+index 0) right
 after init and log the result, so "firmware alive after init" can be told
 apart from "firmware silent" from dmesg alone.
 
@@ -47,7 +48,7 @@ apart from "firmware silent" from dmesg alone.
  
  	cmd = WLAN_FUNC_SET_WAIT_PKT_BUF_ADDR;
  	err = airoha_npu_wlan_set_reserved_memory(npu, 0, "pkt", cmd);
-@@ -567,7 +567,25 @@
+@@ -567,7 +567,28 @@
  			return err;
  	}
  
@@ -61,16 +62,19 @@ apart from "firmware silent" from dmesg alone.
 +		return err;
 +
 +	/* Post-init sanity check: is the firmware still completing mailbox
-+	 * transactions?  -ETIMEDOUT here means the firmware went silent right
-+	 * after init and offload cannot work at all.
++	 * transactions?  Note the firmware GET table is only 10 entries
++	 * (0..9), so this must be WLAN_FUNC_GET_WAIT_NPU_INFO (index 0).
++	 * Do NOT use WLAN_FUNC_GET_WAIT_NPU_VERSION (index 10): it is out of
++	 * range, hits wifi_mail_exceed() and wedges the mailbox exactly like
++	 * the out-of-range SET command above did.
 +	 */
 +	{
 +		u32 ver = 0;
 +		int r;
 +
-+		r = airoha_npu_wlan_msg_get(npu, 0, WLAN_FUNC_GET_WAIT_NPU_VERSION,
++		r = airoha_npu_wlan_msg_get(npu, 0, WLAN_FUNC_GET_WAIT_NPU_INFO,
 +					    &ver, sizeof(ver), GFP_KERNEL);
-+		dev_info(npu->dev, "NPU post-init check: version query ret=%d ver=0x%x\n",
++		dev_info(npu->dev, "NPU post-init check: npu_info ret=%d ver=0x%x\n",
 +			 r, ver);
 +	}
 +
