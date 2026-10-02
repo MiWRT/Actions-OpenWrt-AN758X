@@ -30,28 +30,38 @@ define KernelPackage/airoha-wed
   SECTION:=kernel
   CATEGORY:=Kernel modules
   SUBMENU:=Wireless Drivers
-  TITLE:=Airoha AN7581 WED/WDMA bring-up (probe + WDMA rings)
+  TITLE:=Airoha AN7581 WED probe (read-only)
   DEPENDS:=@TARGET_airoha
-  FILES:=$(PKG_BUILD_DIR)/airoha-wed.ko $(PKG_BUILD_DIR)/airoha-wdma.ko
-  AUTOLOAD:=$(call AutoProbe,airoha-wed,airoha-wdma)
+  FILES:=$(PKG_BUILD_DIR)/airoha-wed.ko
+  AUTOLOAD:=$(call AutoProbe,airoha-wed)
 endef
 
 define KernelPackage/airoha-wed/description
-  Bring-up modules for the Wi-Fi downlink offload path on the Airoha
-  AN7581.
+  Probes the two MT7622-derived Wi-Fi Offload Engine blocks inside the
+  Airoha AN7581 (0x1fa02000 / 0x1fa03000), reports WED_REV for each and
+  exposes a full register dump at /sys/kernel/debug/airoha-wed/regs.
+  Read-only: no writes, no IRQs, no DMA.
+endef
 
-  airoha-wed probes the two MT7622-derived Wi-Fi Offload Engine blocks
-  (0x1fa02000 / 0x1fa03000), reports WED_REV for each and exposes a full
-  register dump at /sys/kernel/debug/airoha-wed/regs. Read-only.
+define KernelPackage/airoha-wdma
+  SECTION:=kernel
+  CATEGORY:=Kernel modules
+  SUBMENU:=Wireless Drivers
+  TITLE:=Airoha AN7581 WDMA rings (Wi-Fi downlink offload, SoC side)
+  DEPENDS:=@TARGET_airoha +kmod-airoha-wed
+  FILES:=$(PKG_BUILD_DIR)/airoha-wdma.ko
+  AUTOLOAD:=$(call AutoProbe,airoha-wdma)
+endef
 
-  airoha-wdma claims the companion WDMA block (0x1fa06000 / 0x1fa06400),
-  allocates its two 1024-entry RX descriptor rings and starts the RX DMA
-  engine, with a dump at /sys/kernel/debug/airoha-wdma/regs.
+define KernelPackage/airoha-wdma/description
+  Claims the companion WDMA block (0x1fa06000 / 0x1fa06400), allocates
+  its two 1024-entry RX descriptor rings per instance and starts the RX
+  DMA engine, with a dump at /sys/kernel/debug/airoha-wdma/regs.
 
-  Neither module registers an mtk_soc_wed_ops table yet, so mainline mt76
-  keeps the WED path disabled and normal Wi-Fi behaviour is untouched.
-  With flow_offloading_hw=0 no packet reaches PSE port 3, so the started
-  WDMA simply idles on an empty queue.
+  Does not register an mtk_soc_wed_ops table yet, so mainline mt76 keeps
+  the WED path disabled and normal Wi-Fi behaviour is untouched. With
+  flow_offloading_hw=0 no packet reaches PSE port 3, so the started WDMA
+  simply idles on an empty queue.
 endef
 
 define Build/Prepare
@@ -67,3 +77,4 @@ define Build/Compile
 endef
 
 $(eval $(call KernelPackage,airoha-wed))
+$(eval $(call KernelPackage,airoha-wdma))
