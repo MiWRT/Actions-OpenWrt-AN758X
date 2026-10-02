@@ -81,6 +81,15 @@
 #define AIROHA_WDMA_INT_STS_GRP2	0x248
 #define AIROHA_WDMA_INT_GRP1		0x250
 #define AIROHA_WDMA_INT_GRP2		0x254
+
+/*
+ * RX consumer (CRX) index counters. whnat's woe_hw.c clears both right after
+ * WDMA_RST_IDX while draining a stop sequence: resetting the DRX index alone
+ * leaves the consumer pointers stale, and the frames they already reference
+ * stay pinned in the FE (PSE) shared buffer.
+ */
+#define AIROHA_WDMA_RX_CRX_IDX0	0x108
+#define AIROHA_WDMA_RX_CRX_IDX1	0x118
 #define AIROHA_WDMA_SCH_Q01_CFG		0x280
 #define AIROHA_WDMA_SCH_Q23_CFG		0x284
 

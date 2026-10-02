@@ -895,6 +895,61 @@ static void airoha_wed_stop(struct mtk_wed_device *dev)
 	dev->running = false;
 }
 
+/*
+ * Drain the WDMA RX path so the frames it already pulled from the FE come
+ * back to the PSE shared buffer.
+ *
+ * Stopping the RX driver is not enough: whnat's woe_hw.c reset sequence
+ * (airoha_wed_wdma/woe_hw.c:515-548) does three more things that we used to
+ * skip, and without them the received frames stay pinned in hardware.
+ *
+ * 1. Wait for WED_WDMA_RX_DRV_BUSY to fall, i.e. the driver is handed back
+ *    the ring and is no longer fetching. Resetting the index underneath a
+ *    running driver is what leaves the descriptors half-owned.
+ * 2. Reset WDMA_RST_IDX on the *WDMA* window (DRX0/DRX1), then zero
+ *    WDMA_RX_CRX_IDX0/1. Resetting only the WED-side mirror rewinds the
+ *    producer while the consumer counters still point into the old frames.
+ * 3. Pulse WED_WDMA_GLO_CFG_RST_INIT_COMPLETE. The reset above is only a
+ *    request; this is the hardware's acknowledgement handshake, and skipping
+ *    it leaves the block stalled mid-recovery.
+ *
+ * This matters because every attach/detach cycle leaks otherwise: measured on
+ * the real device, one WED activation followed by a rollback left ~11880
+ * frames in FE port 3, matching PSE_SHARE_BUF_STA share_use 11833 of 12064
+ * with share_free down to 231 pages.
+ */
+static void airoha_wed_drain_rx(struct airoha_wed_bind *b)
+{
+	struct airoha_wed *wed = airoha_wed_get();
+	struct airoha_wed_bank *bank = b->bank;
+	u32 val;
+	int ret;
+
+	ret = airoha_wed_poll_busy(b, AIROHA_WED_WDMA_GLO_CFG,
+				    AIROHA_WED_WDMA_RX_DRV_BUSY);
+	if (ret && wed)
+		dev_warn(wed->dev,
+			 "WED%d: RX driver still busy after stop, draining anyway\n",
+			 b->index);
+
+	/* Producer index first, then the consumer counters that referenced
+	 * the frames it had already handed over.
+	 */
+	airoha_wdma_write(bank, AIROHA_WDMA_RST_IDX,
+			  AIROHA_WDMA_RST_DRX_IDX(0) |
+			  AIROHA_WDMA_RST_DRX_IDX(1));
+	airoha_wdma_write(bank, AIROHA_WDMA_RST_IDX, 0);
+	airoha_wdma_write(bank, AIROHA_WDMA_RX_CRX_IDX0, 0);
+	airoha_wdma_write(bank, AIROHA_WDMA_RX_CRX_IDX1, 0);
+
+	/* Tell WED the WDMA reset it asked for has completed. */
+	val = airoha_wed_read(bank, AIROHA_WED_WDMA_GLO_CFG) |
+	      AIROHA_WED_WDMA_RST_INIT_COMPLETE;
+	airoha_wed_write(bank, AIROHA_WED_WDMA_GLO_CFG, val);
+	airoha_wed_write(bank, AIROHA_WED_WDMA_GLO_CFG,
+			 val & ~AIROHA_WED_WDMA_RST_INIT_COMPLETE);
+}
+
 static void airoha_wed_detach(struct mtk_wed_device *dev)
 {
 	struct airoha_wed_bind *b = airoha_wed_find(dev);
@@ -913,6 +968,8 @@ static void airoha_wed_detach(struct mtk_wed_device *dev)
 			   AIROHA_WED_CTRL_WPDMA_INT_AGT_EN |
 			   AIROHA_WED_CTRL_WED_TX_BM_EN |
 			   AIROHA_WED_CTRL_WED_TX_FREE_AGT_EN));
+
+	airoha_wed_drain_rx(b);
 
 	airoha_wed_write(bank, AIROHA_WED_WDMA_RST_IDX,
 			 AIROHA_WED_WDMA_RST_IDX_RX |
@@ -973,18 +1030,11 @@ static void airoha_wed_reset_dma(struct mtk_wed_device *dev)
 		airoha_wed_reset(b, AIROHA_WED_RST_WDMA_INT_AGT);
 		airoha_wed_reset(b, AIROHA_WED_RST_WDMA_RX_DRV);
 	} else {
+		airoha_wed_drain_rx(b);
 		airoha_wed_write(bank, AIROHA_WED_WDMA_RST_IDX,
 				 AIROHA_WED_WDMA_RST_IDX_RX |
 				 AIROHA_WED_WDMA_RST_IDX_DRV);
 		airoha_wed_write(bank, AIROHA_WED_WDMA_RST_IDX, 0);
-		airoha_wed_write(bank, AIROHA_WED_WDMA_GLO_CFG,
-				 airoha_wed_read(bank,
-						 AIROHA_WED_WDMA_GLO_CFG) |
-				 AIROHA_WED_WDMA_RST_INIT_COMPLETE);
-		airoha_wed_write(bank, AIROHA_WED_WDMA_GLO_CFG,
-				 airoha_wed_read(bank,
-						 AIROHA_WED_WDMA_GLO_CFG) &
-				 ~AIROHA_WED_WDMA_RST_INIT_COMPLETE);
 	}
 
 	airoha_wed_write(bank, AIROHA_WED_CTRL,
