@@ -330,7 +330,7 @@ diff --git a/mt7915/main.c b/mt7915/main.c
  }
  
  static void mt7915_tx(struct ieee80211_hw *hw,
-@@ -1851,6 +1868,80 @@
+@@ -1851,6 +1868,76 @@
  	ieee80211_queue_delayed_work(hw, &phy->mt76->mac_work,
  				     MT7915_WATCHDOG_TIME);
  }
@@ -356,19 +356,15 @@ diff --git a/mt7915/main.c b/mt7915/main.c
 +		have_wdma = true;
 +	}
 +#endif
-+	if (!have_wdma) {
-+		/* Airoha PPE/NPU: there is no MediaTek WDMA. Offloaded frames
-+		 * leave the PPE on PSE port CDM4 and are pushed to the hardware
-+		 * queue of the band the station is associated to, so the band
-+		 * index is what the airoha PPE uses as both the NBQ and the
-+		 * WDMA band here. wcid must be the real one: it is the key the
-+		 * NPU got from mt7915_npu_wcid_sync().
-+		 */
-+		if (!mt76_npu_bound(&dev->mt76))
-+			return -ENODEV;
-+
-+		wdma_idx = phy->mt76->band_idx;
-+	}
++	/* No MediaTek WDMA attached => there is nothing on the Airoha side
++	 * that would drain PSE port CDM4, so an entry pointing at it would
++	 * pile up packets until the shared PSE buffer is exhausted and the
++	 * whole switch dies. Refuse the offload instead. The NPU/kite
++	 * firmware has no WiFi TX path for MT7916 either, so this branch
++	 * can never work - it only ever caused the PSE clog.
++	 */
++	if (!have_wdma)
++		return -ENODEV;
 +
 +	if (msta->wcid.idx > MT7915_WTBL_STA)
 +		return -EIO;

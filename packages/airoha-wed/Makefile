@@ -30,20 +30,28 @@ define KernelPackage/airoha-wed
   SECTION:=kernel
   CATEGORY:=Kernel modules
   SUBMENU:=Wireless Drivers
-  TITLE:=Airoha AN7581 WED register probe (read-only)
+  TITLE:=Airoha AN7581 WED/WDMA bring-up (probe + WDMA rings)
   DEPENDS:=@TARGET_airoha
-  FILES:=$(PKG_BUILD_DIR)/airoha-wed.ko
-  AUTOLOAD:=$(call AutoProbe,airoha-wed)
+  FILES:=$(PKG_BUILD_DIR)/airoha-wed.ko $(PKG_BUILD_DIR)/airoha-wdma.ko
+  AUTOLOAD:=$(call AutoProbe,airoha-wed,airoha-wdma)
 endef
 
 define KernelPackage/airoha-wed/description
-  Probes the two MT7622-derived Wi-Fi Offload Engine blocks inside the
-  Airoha AN7581 (0x1fa02000 / 0x1fa03000) and reports WED_REV for each,
-  plus a full register dump at /sys/kernel/debug/airoha-wed/regs.
+  Bring-up modules for the Wi-Fi downlink offload path on the Airoha
+  AN7581.
 
-  Read-only: no writes, no IRQs, no DMA. Loading it cannot disturb Wi-Fi.
-  This exists to prove the DT nodes describe real, clocked hardware before
-  the WED downlink offload path is built out on top of them.
+  airoha-wed probes the two MT7622-derived Wi-Fi Offload Engine blocks
+  (0x1fa02000 / 0x1fa03000), reports WED_REV for each and exposes a full
+  register dump at /sys/kernel/debug/airoha-wed/regs. Read-only.
+
+  airoha-wdma claims the companion WDMA block (0x1fa06000 / 0x1fa06400),
+  allocates its two 1024-entry RX descriptor rings and starts the RX DMA
+  engine, with a dump at /sys/kernel/debug/airoha-wdma/regs.
+
+  Neither module registers an mtk_soc_wed_ops table yet, so mainline mt76
+  keeps the WED path disabled and normal Wi-Fi behaviour is untouched.
+  With flow_offloading_hw=0 no packet reaches PSE port 3, so the started
+  WDMA simply idles on an empty queue.
 endef
 
 define Build/Prepare
