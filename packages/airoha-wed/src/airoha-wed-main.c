@@ -33,6 +33,7 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/io.h>
+#include <linux/ioport.h>
 #include <linux/slab.h>
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>

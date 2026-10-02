@@ -189,7 +189,10 @@
 #define AIROHA_WED_TX_BM_CTRL_VLD_GRP	GENMASK(6, 0)
 #define AIROHA_WED_TX_BM_TKID_END	GENMASK(31, 16)
 #define AIROHA_WED_TX_BM_TKID_START	GENMASK(15, 0)
-#define AIROHA_WED_TX_BM_BLEN		GENMASK(13, 0)
+/* NOTE: AIROHA_WED_TX_BM_BLEN above is the register offset; this is the
+ * buffer-length field inside it. Distinct name on purpose -- a second
+ * #define of the same identifier is a -Werror=macro-redefined trap. */
+#define AIROHA_WED_TX_BM_BLEN_MASK	GENMASK(13, 0)
 #define AIROHA_WED_TX_BM_INTF_TKFIFO_FDEP GENMASK(22, 16)
 #define AIROHA_WED_TX_BM_DYN_TH_HI	GENMASK(22, 16)
 #define AIROHA_WED_TX_BM_DYN_TH_LO	GENMASK(6, 0)

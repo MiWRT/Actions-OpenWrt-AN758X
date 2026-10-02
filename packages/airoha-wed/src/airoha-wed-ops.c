@@ -44,9 +44,12 @@
 #include <linux/ioport.h>
 #include <linux/delay.h>
 #include <linux/rcupdate.h>
+#include <linux/mutex.h>
+#include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/bitfield.h>
 #include <net/pkt_cls.h>
+#include <net/flow_offload.h>
 #include <linux/soc/mediatek/mtk_wed.h>
 
 #include "airoha-wed.h"
@@ -259,7 +262,10 @@ static int airoha_wed_tx_buffer_alloc(struct mtk_wed_device *dev)
 		void *buf;
 		int s;
 
-		page = __dev_alloc_page(GFP_KERNEL | GFP_DMA32);
+		/* mainline uses __dev_alloc_page() here; alloc_page() is the
+		 * same thing minus the page_frag reset and, unlike it, needs
+		 * no symbol from the net stack in an out-of-tree module. */
+		page = alloc_page(GFP_KERNEL | GFP_DMA32);
 		if (!page)
 			return -ENOMEM;
 
