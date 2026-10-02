@@ -23,7 +23,7 @@ diff --git a/target/linux/airoha/dts/an7581-wed.dtsi b/target/linux/airoha/dts/a
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/dts/an7581-wed.dtsi
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,123 @@
 +// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 +
 +#include <dt-bindings/interrupt-controller/irq.h>
@@ -107,12 +107,27 @@ new file mode 100644
 +			 * datapath is unchanged. It is what makes the bring-up
 +			 * reversible without reflashing.
 +			 *
-+			 * Deliberately NOT set: this build only rehearses. Add
-+			 * "airoha,attach-enable;" here once the dry-run log shows
-+			 * PCIE_CFG_BASE and WPDMA_CFG_BASE landing on the right
-+			 * controller.
++			 * Now set. On-device 2026-10-03, via
++			 * "echo 1 > .../airoha_wed/parameters/attach_enable"
++			 * plus an insmod with wed_enable=1:
++			 *   WED0 attached
++			 *   WED0 started (irq_mask=0xee0e000b)
++			 *   WED_CTRL 0x01000000 -> 0x01000507 (TX_BM + TX_FREE_AGT)
++			 * with both APs coming up and an associated client at
++			 * 780 Mbit/s VHT-MCS9. The PCIe map landed on bus 1 /
++			 * 0x1fc20000 as intended. One-shot WED_EX_INT_STA
++			 * 0x00380000 is reported and clears itself; it did not
++			 * stop the datapath.
++			 *
++			 * Note: this alone is not enough to offload. mt7915e has
++			 * a second gate, its own wed_enable module parameter,
++			 * which /etc/modules.d/mt7915e already sets to 1. Both
++			 * must be true. Note also that modprobe drops that
++			 * argument on this platform; only an explicit
++			 * "insmod .../mt7915e.ko wed_enable=1" works.
 +			 */
 +			airoha,wed-ops;
++			airoha,attach-enable;
 +
 +			status = "disabled";
 +		};
