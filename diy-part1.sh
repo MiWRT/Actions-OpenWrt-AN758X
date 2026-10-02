@@ -15,6 +15,40 @@ PKG_DIR="package/custom"
 mkdir -p "$PKG_DIR"
 
 # ---------------------------------------------------------
+# 本地包：$REPO_DIR/packages/<pkg>/ → package/custom
+#
+# ⚠️ 为什么需要这一段：仓库里的 packages/ 目录此前没有任何地方引用。
+#    放在这里的包既不会被 buildroot 扫描、也不会生成 CONFIG_PACKAGE_*
+#    符号，表现为「目录存在、编译成功、固件里却没有任何东西」，
+#    而且 defconfig 会静默把 .config 里的 =y 当无效符号删掉（不报错）。
+#    这里把它们拷进 package/custom，复用下方的 src-link custom feed
+#    注册机制。
+#
+#    $REPO_DIR 取脚本自身所在目录：工作流是以
+#    "$GITHUB_WORKSPACE/$DIY_P1_SH" 调用的，$0 就是它的绝对路径，
+#    不依赖任何额外环境变量。
+# ---------------------------------------------------------
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -d "$REPO_DIR/packages" ]; then
+  found=0
+  for d in "$REPO_DIR"/packages/*; do
+    [ -d "$d" ] || continue
+    n=$(basename "$d")
+    if [ ! -f "$d/Makefile" ]; then
+      echo "::warning::本地包缺少 Makefile，跳过: packages/$n"
+      continue
+    fi
+    rm -rf "$PKG_DIR/$n"
+    cp -r "$d" "$PKG_DIR/$n"
+    echo "✅ 本地包已安装: $n"
+    found=1
+  done
+  [ "$found" = "1" ] || echo "   packages/ 为空，无本地包"
+else
+  echo "   无本地包目录: $REPO_DIR/packages"
+fi
+
+# ---------------------------------------------------------
 # 插件开关
 # 默认开启：Airoha SoC 状态页（config 里已 =y，必须拉否则 defconfig 会剔除）
 #

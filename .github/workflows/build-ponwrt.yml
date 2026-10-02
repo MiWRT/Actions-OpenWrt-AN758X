@@ -363,6 +363,28 @@ jobs:
         cd openwrt && echo "commit: $(git rev-parse --short HEAD)"
 
     # =========================================================
+    # 2.1 应用 ponwrt 源码树补丁（DTS / package Makefile / 默认值）
+    #
+    #     ⚠️ 为什么必须新加这一步：scripts/apply-patches.sh 早就写好了，
+    #     但从来没有地方调用它 —— patches/ponwrt/ 下的补丁一直没进编译，
+    #     表现为「补丁已提交、构建成功、设备行为毫无变化」。
+    #     和下面 Install kernel patches 之前的问题完全同类。
+    #
+    #     时机（README 的 step 4.5）：clone 之后立刻应用。必须早于
+    #     apply-npu-dts.sh（往机型 dts 插 include），也早于 make download /
+    #     defconfig —— 那时源码已经定型，再改不生效。
+    #
+    #     幂等：已打过的补丁会被反向 apply 检测跳过，重跑 CI 不会重复打。
+    # =========================================================
+    - name: Apply ponwrt tree patches
+      run: |
+        set -euo pipefail
+        cd "$BUILD_ROOT/openwrt"
+        chmod +x "$GITHUB_WORKSPACE/scripts/"*.sh
+        PATCH_STRICT=true bash "$GITHUB_WORKSPACE/scripts/apply-patches.sh" \
+             "$BUILD_ROOT/openwrt" "$GITHUB_WORKSPACE/patches/ponwrt" "ponwrt"
+
+    # =========================================================
     # 2.5 覆盖 mt76 无线驱动包
     #
     #     ⚠️ 必须在 feeds update 与 make download / defconfig 之前做：
