@@ -208,7 +208,25 @@
  * programs the PCIe controller base straight into WED_PCIE_CFG_BASE, then
  * sets bit 20 of WED_PCIE_INT_CTRL. These are the EN7581 branches of
  * whnat_hal_pcie_map() / woe_hif.h.
+ *
+ * The base must match the PCIe controller the MT7916D actually sits on, not
+ * the WED index. On this board the radio enumerates as 0001:01:00.0, i.e.
+ * behind pcie@1fc20000 (bus 0001), while 0000:01:00.0 (the HIF) is on
+ * pcie@1fc00000. The two WED banks are wired 1:1 to those two controllers,
+ * so the mapping is taken from the PCI bus number rather than assumed.
  */
-#define AIROHA_WED_PCIE_BASE(_n)	(0x1fc00000 + (_n) * 0x20000)
+#define AIROHA_WED_PCIE_BASE_FOR_BUS(_bus)	(0x1fc00000 + (_bus) * 0x20000)
+
+/* WED_PCIE_INTS_TRIG: EN7581 uses bit 24, not the mt7622 bit 16
+ * (woe_hw.h: PCIE_INT_STA_OFFSET_EN7581 = 1 << 24). */
+#define AIROHA_WED_PCIE_INTS_TRIG_EN7581	BIT(24)
+
+/* WED_PCIE_OFST: EN7581 fixed value, woe_hw.c whnat_hal_int_ctrl(). */
+#define AIROHA_WED_PCIE_OFST_EN7581		0x01800184
+
+/* WED_PCIE_INT_CTRL polling mode, needed because there is no CR mirror to
+ * deliver the WED <-> PCIe interrupt. woe_hw.h: PCIE_POLL_MODE_ALWAYS. */
+#define AIROHA_WED_PCIE_INT_CTRL_POLL_EN	BIT(14)	/* REG_FLD(2, 12) */
+#define AIROHA_WED_PCIE_INT_CTRL_POLL_ALWAYS	(2 << 12)
 
 #endif /* _AIROHA_WED_REGS_H */

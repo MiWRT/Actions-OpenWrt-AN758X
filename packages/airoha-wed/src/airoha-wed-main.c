@@ -272,9 +272,11 @@ static int airoha_wed_probe(struct platform_device *pdev)
 	/* Publish the ops table before mt7915 probes. This is what makes
 	 * mtk_wed_device_active() true for mt76 -- until it happens, mt7915's
 	 * forward path refuses to offload and Wi-Fi stays 100% software.
-	 * airoha_wed_ops_register() is a no-op unless wed_ops=1. */
+	 * The on/off switches come from the device tree, because this module
+	 * is auto-loaded by modalias long before procd could pass module
+	 * parameters. No-op unless airoha,wed-ops is set. */
 	airoha_wed_priv = wed;
-	airoha_wed_ops_register();
+	airoha_wed_ops_register(dev->of_node);
 
 	dev_info(dev, "probing done: %d instance(s), registers readable, dump at debugfs/%s/regs\n",
 		 wed->nbank, DRV_NAME);

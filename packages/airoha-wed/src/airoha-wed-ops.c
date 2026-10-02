@@ -40,6 +40,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
+#include <linux/pci.h>
 #include <linux/gfp.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
@@ -115,6 +116,50 @@ MODULE_PARM_DESC(wed_ops, "Publish the mtk_soc_wed_ops table (0 keeps Wi-Fi soft
 static bool attach_enable;
 module_param(attach_enable, bool, 0644);
 MODULE_PARM_DESC(attach_enable, "Let attach() succeed (0 = dry run: init then roll back)");
+
+/*
+ * AN7581-SPECIFIC: module parameters do not work for this driver.
+ *
+ * The wed node is status = "okay", so the kernel matches it by modalias and
+ * calls request_module() the moment the platform device is registered --
+ * measured on-device at t=3.38s, which is *before* preinit (3.75s) and long
+ * before procd reads /etc/modules.d (10.4s). By the time procd runs
+ * "modprobe airoha-wed wed_ops=1", the module is already resident and the
+ * arguments are silently dropped. Verified: /etc/modules.d with explicit
+ * arguments still yields wed_ops=N, while
+ * "insmod /lib/modules/6.18.52/airoha-wed.ko wed_ops=1" yields wed_ops=Y.
+ *
+ * So the switches have to come from the device tree, which is readable no
+ * matter who loaded us. Properties override module parameters only when the
+ * parameter was left at its default, so an explicit module parameter still
+ * wins when the module is loaded by hand.
+ */
+static bool wed_ops_from_dt;
+static bool attach_enable_from_dt;
+
+void airoha_wed_ops_read_dt(struct device_node *np)
+{
+	if (!of_property_read_bool(np, "airoha,wed-ops"))
+		return;
+
+	/*
+	 * Only fill in what the module parameter did not set. That keeps a
+	 * hand-written "insmod ... attach_enable=1" authoritative while still
+	 * giving the auto-loaded path a working default.
+	 */
+	if (!wed_ops) {
+		wed_ops = true;
+		wed_ops_from_dt = true;
+	}
+	if (!attach_enable) {
+		attach_enable = of_property_read_bool(np, "airoha,attach-enable");
+		attach_enable_from_dt = true;
+	}
+
+	pr_info("airoha-wed: switches after device tree: wed_ops=%d%s attach_enable=%d%s\n",
+		wed_ops, wed_ops_from_dt ? " (dt)" : "",
+		attach_enable, attach_enable_from_dt ? " (dt)" : "");
+}
 
 /* One entry per WED instance: which mtk_wed_device is bound to which bank. */
 struct airoha_wed_bind {
@@ -365,14 +410,39 @@ static void airoha_wed_pcie_map(struct airoha_wed_bind *b,
 				struct mtk_wed_device *dev)
 {
 	struct airoha_wed_bank *bank = b->bank;
+	struct pci_dev *pdev = dev->wlan.pci_dev;
+	u8 bus;
+
+	/*
+	 * Pick the controller base from the PCI bus the radio is actually
+	 * behind, not from the WED bank index. On this board MT7916D shows up
+	 * as 0001:01:00.0 (pcie@1fc20000, bus 1) while the HIF is 0000:01:00.0
+	 * (pcie@1fc00000, bus 0); bank 0 is the first free one and would
+	 * otherwise program the wrong controller.
+	 */
+	bus = pdev ? pci_bus_nr(pdev->bus) : b->index;
 
 	airoha_wed_write(bank, AIROHA_WED_PCIE_CFG_BASE,
-			 AIROHA_WED_PCIE_BASE(b->index));
+			 AIROHA_WED_PCIE_BASE_FOR_BUS(bus));
 	airoha_wed_write(bank, AIROHA_WED_WPDMA_CFG_BASE,
 			 dev->wlan.wpdma_phys);
+
+	/* No CR mirror exists on AN7581, so WED has to poll the PCIe
+	 * interrupt status register instead of waiting for a write-back. */
 	airoha_wed_write(bank, AIROHA_WED_PCIE_INT_CTRL,
-			 airoha_wed_read(bank, AIROHA_WED_PCIE_INT_CTRL) |
+			 AIROHA_WED_PCIE_INT_CTRL_POLL_ALWAYS |
 			 AIROHA_WED_PCIE_INT_CTRL_MSK_EN_POLA);
+	airoha_wed_write(bank, AIROHA_WED_PCIE_INTS_TRIG,
+			 AIROHA_WED_PCIE_INTS_TRIG_EN7581);
+	airoha_wed_write(bank, AIROHA_WED_PCIE_OFST,
+			 AIROHA_WED_PCIE_OFST_EN7581);
+
+	dev_info(bank->dev ? bank->dev : &pdev->dev,
+		 "airoha-wed: WED%d PCIe map: bus=%u cfg_base=0x%08x wpdma_phys=0x%08x int_ctrl=0x%08x\n",
+		 b->index, bus,
+		 airoha_wed_read(bank, AIROHA_WED_PCIE_CFG_BASE),
+		 airoha_wed_read(bank, AIROHA_WED_WPDMA_CFG_BASE),
+		 airoha_wed_read(bank, AIROHA_WED_PCIE_INT_CTRL));
 }
 
 static void airoha_wed_hw_init_early(struct airoha_wed_bind *b,
@@ -1043,9 +1113,11 @@ static const struct mtk_wed_ops airoha_wed_ops = {
 	.setup_tc		= airoha_wed_setup_tc,
 };
 
-int airoha_wed_ops_register(void)
+int airoha_wed_ops_register(struct device_node *np)
 {
 	int i;
+
+	airoha_wed_ops_read_dt(np);
 
 	if (!wed_ops)
 		return 0;
@@ -1077,7 +1149,7 @@ void airoha_wed_ops_unregister(void)
 
 #else /* !CONFIG_NET_MEDIATEK_SOC_WED */
 
-int airoha_wed_ops_register(void)
+int airoha_wed_ops_register(struct device_node *np)
 {
 	pr_info("airoha-wed: CONFIG_NET_MEDIATEK_SOC_WED is off, no ops table\n");
 	return 0;

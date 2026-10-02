@@ -59,7 +59,7 @@ static inline void airoha_wdma_write(const struct airoha_wed_bank *b, u32 reg,
 }
 
 /* airoha-wed-ops.c */
-int airoha_wed_ops_register(void);
+int airoha_wed_ops_register(struct device_node *np);
 void airoha_wed_ops_unregister(void);
 
 #endif /* _AIROHA_WED_H */

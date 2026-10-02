@@ -23,7 +23,7 @@ diff --git a/target/linux/airoha/dts/an7581-wed.dtsi b/target/linux/airoha/dts/a
 new file mode 100644
 --- /dev/null
 +++ b/target/linux/airoha/dts/an7581-wed.dtsi
-@@ -0,0 +1,78 @@
+@@ -0,0 +1,108 @@
 +// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 +
 +#include <dt-bindings/interrupt-controller/irq.h>
@@ -84,6 +84,36 @@ new file mode 100644
 +			wed_num = <2>;
 +			/* WED instance -> PCIe slot carrying that MT7916 HIF */
 +			pci_slot_map = <0 1>;
++
++			/*
++			 * Publish the mtk_soc_wed_ops table. Off by default:
++			 * without it mt76's forward path sees
++			 * mtk_wed_device_active() == false and Wi-Fi stays
++			 * software-only.
++			 *
++			 * This has to be a device-tree property rather than a
++			 * module parameter. The node is "okay", so the kernel
++			 * autoloads airoha-wed by modalias at t=3.38s on this
++			 * board -- before preinit (3.75s) and before procd reads
++			 * /etc/modules.d (10.4s). Module arguments supplied there
++			 * are silently dropped because the module is already
++			 * resident. Verified on-device: modules.d with explicit
++			 * arguments still gave wed_ops=N, while
++			 * "insmod .../airoha-wed.ko wed_ops=1" gave wed_ops=Y.
++			 *
++			 * airoha,attach-enable additionally lets attach() succeed.
++			 * Leaving it off programs the hardware exactly as a real
++			 * attach would, then rolls back and refuses, so the Wi-Fi
++			 * datapath is unchanged. It is what makes the bring-up
++			 * reversible without reflashing.
++			 *
++			 * Deliberately NOT set: this build only rehearses. Add
++			 * "airoha,attach-enable;" here once the dry-run log shows
++			 * PCIE_CFG_BASE and WPDMA_CFG_BASE landing on the right
++			 * controller.
++			 */
++			airoha,wed-ops;
++
 +			status = "disabled";
 +		};
 +
