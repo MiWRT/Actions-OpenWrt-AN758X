@@ -41,6 +41,7 @@
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/pci.h>
+#include <linux/of.h>
 #include <linux/gfp.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
@@ -137,7 +138,7 @@ MODULE_PARM_DESC(attach_enable, "Let attach() succeed (0 = dry run: init then ro
 static bool wed_ops_from_dt;
 static bool attach_enable_from_dt;
 
-void airoha_wed_ops_read_dt(struct device_node *np)
+static void airoha_wed_ops_read_dt(struct device_node *np)
 {
 	if (!of_property_read_bool(np, "airoha,wed-ops"))
 		return;
@@ -419,8 +420,11 @@ static void airoha_wed_pcie_map(struct airoha_wed_bind *b,
 	 * as 0001:01:00.0 (pcie@1fc20000, bus 1) while the HIF is 0000:01:00.0
 	 * (pcie@1fc00000, bus 0); bank 0 is the first free one and would
 	 * otherwise program the wrong controller.
+	 *
+	 * dev->bus->number rather than the pci_bus_nr() helper: that inline
+	 * disappeared from <linux/pci.h> during the 6.x cleanups.
 	 */
-	bus = pdev ? pci_bus_nr(pdev->bus) : b->index;
+	bus = pdev ? pdev->bus->number : b->index;
 
 	airoha_wed_write(bank, AIROHA_WED_PCIE_CFG_BASE,
 			 AIROHA_WED_PCIE_BASE_FOR_BUS(bus));
@@ -437,7 +441,12 @@ static void airoha_wed_pcie_map(struct airoha_wed_bind *b,
 	airoha_wed_write(bank, AIROHA_WED_PCIE_OFST,
 			 AIROHA_WED_PCIE_OFST_EN7581);
 
-	dev_info(bank->dev ? bank->dev : &pdev->dev,
+	/*
+	 * Log through the platform device. struct airoha_wed_bank carries only
+	 * the register windows, no struct device *, and dev->dev is already
+	 * pointed at the WED platform device by attach().
+	 */
+	dev_info(dev->dev,
 		 "airoha-wed: WED%d PCIe map: bus=%u cfg_base=0x%08x wpdma_phys=0x%08x int_ctrl=0x%08x\n",
 		 b->index, bus,
 		 airoha_wed_read(bank, AIROHA_WED_PCIE_CFG_BASE),

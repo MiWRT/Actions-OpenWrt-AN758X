@@ -12,6 +12,7 @@
 #include <linux/types.h>
 
 struct device;
+struct device_node;
 
 #define AIROHA_WED_MAX_BANKS		2
 
