@@ -84,9 +84,8 @@
 #define AIROHA_WDMA_SCH_Q01_CFG		0x280
 #define AIROHA_WDMA_SCH_Q23_CFG		0x284
 
-/* Mirror of the RX rings inside the WED window, used in the attach stage.
- * Matches mainline MTK_WED_WDMA_RING_RX(). */
-#define AIROHA_WED_WDMA_RING_RX(_n)	(0x900 + (_n) * 0x10)
+/* The WED-side mirror of those RX rings lives in airoha-wed-regs.h
+ * (AIROHA_WED_WDMA_RING_RX), next to the rest of the WED window. */
 
 /* Descriptor layout, 16 bytes.
  *

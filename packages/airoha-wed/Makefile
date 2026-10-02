@@ -1,16 +1,24 @@
 # ==================================================================
-# airoha-wed — Airoha AN7581 WED (Wi-Fi Offload Engine) probe
+# airoha-wed — Airoha AN7581 WED (Wi-Fi Offload Engine) driver
 #
-#   SoC-side peer of the mt_whnat WOE/WED driver. This package is stage 1
-#   of bringing up the Wi-Fi downlink offload path and is intentionally
-#   read-only: claim the platform device, ioremap the register windows,
-#   report and expose a debugfs dump.
+#   SoC-side peer of the mt_whnat WOE/WED driver, and the missing half of
+#   mainline mt76's mt7915 WED support: on AN7581 mtk_eth_soc never probes,
+#   so nothing fills the global mtk_soc_wed_ops pointer and mt76 keeps the
+#   offload path disabled. This package fills it.
 #
-#   It does NOT yet register an mtk_soc_wed_ops table, so mainline mt76's
-#   mt7915 WED hooks stay inactive and normal Wi-Fi behaviour is untouched.
-#   Later stages add tx/rx ring setup and that registration; switching it
-#   on before the ring helpers exist would make mt7915 take paths that
-#   cannot work.
+#   Stage 1 (done): probe, ioremap, register dump.
+#   Stage 3b (this): publish the ops table with attach/tx_ring_setup/
+#   rx_ring_setup/txfree_ring_setup/start/stop/detach, following mainline's
+#   WED-v1 (mt7622) sequence -- the block reads back WED_REV 0x76220001.
+#
+#   Deliberately shipped with attach_enable=0 (dry run). The ops table is
+#   published but attach() refuses after programming the hardware, so
+#   mtk_wed_device_active() stays false, mt76 never offloads and Wi-Fi runs
+#   exactly as before. Flipping a module parameter and rebooting is enough
+#   to try the real thing -- no reflash needed either way.
+#
+#   Load priority 05 puts it ahead of mt7915e (which sorts later, having no
+#   numeric prefix) so the ops table exists before mt76 probes.
 #
 #   目录名必须等于包名（buildroot 约定 PKG_NAME ?= $(notdir ${CURDIR})）。
 # ==================================================================
@@ -30,17 +38,21 @@ define KernelPackage/airoha-wed
   SECTION:=kernel
   CATEGORY:=Kernel modules
   SUBMENU:=Wireless Drivers
-  TITLE:=Airoha AN7581 WED probe (read-only)
+  TITLE:=Airoha AN7581 WED (Wi-Fi downlink offload, SoC side)
   DEPENDS:=@TARGET_airoha
   FILES:=$(PKG_BUILD_DIR)/airoha-wed.ko
-  AUTOLOAD:=$(call AutoProbe,airoha-wed)
+  AUTOLOAD:=$(call AutoLoad,05,airoha-wed,wed_ops=1 attach_enable=0)
 endef
 
 define KernelPackage/airoha-wed/description
-  Probes the two MT7622-derived Wi-Fi Offload Engine blocks inside the
-  Airoha AN7581 (0x1fa02000 / 0x1fa03000), reports WED_REV for each and
-  exposes a full register dump at /sys/kernel/debug/airoha-wed/regs.
-  Read-only: no writes, no IRQs, no DMA.
+  Drives the two MT7622-derived Wi-Fi Offload Engine blocks inside the
+  Airoha AN7581 (0x1fa02000 / 0x1fa03000) and publishes an mtk_soc_wed_ops
+  table so mainline mt76's mt7915 WED hooks can offload the Wi-Fi downlink.
+  Register dump at /sys/kernel/debug/airoha-wed/regs.
+
+  Ships in dry-run mode (attach_enable=0): the hardware is programmed and
+  read back, then attach() fails on purpose, so Wi-Fi stays software-only.
+  Set attach_enable=1 to actually offload.
 endef
 
 define KernelPackage/airoha-wdma
@@ -50,7 +62,7 @@ define KernelPackage/airoha-wdma
   TITLE:=Airoha AN7581 WDMA rings (Wi-Fi downlink offload, SoC side)
   DEPENDS:=@TARGET_airoha +kmod-airoha-wed
   FILES:=$(PKG_BUILD_DIR)/airoha-wdma.ko
-  AUTOLOAD:=$(call AutoProbe,airoha-wdma)
+  AUTOLOAD:=$(call AutoLoad,06,airoha-wdma)
 endef
 
 define KernelPackage/airoha-wdma/description

@@ -31,36 +31,25 @@
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
 #include <linux/io.h>
 #include <linux/slab.h>
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include <linux/bitfield.h>
 
+#include "airoha-wed.h"
 #include "airoha-wed-regs.h"
 
 #define DRV_NAME			"airoha-wed"
-#define AIROHA_WED_MAX_BANKS		2
 
-struct airoha_wed_bank {
-	void __iomem		*base;
-	unsigned long long	 phys;
-	unsigned long long	 size;
-	int			 irq;
-	u32			 rev;
-	u32			 slot;
-};
+/* The ops table needs the register banks this probe owns, so it lives in the
+ * same module and reaches them through here. */
+static struct airoha_wed *airoha_wed_priv;
 
-struct airoha_wed {
-	struct device		*dev;
-	u8			 nbank;
-	struct airoha_wed_bank	 bank[AIROHA_WED_MAX_BANKS];
-	struct dentry		*dbgfs;
-};
-
-static inline u32 airoha_wed_read(const struct airoha_wed_bank *b, u32 reg)
+struct airoha_wed *airoha_wed_get(void)
 {
-	return readl(b->base + reg);
+	return airoha_wed_priv;
 }
 
 /* Registers worth dumping: identification plus everything we already know
@@ -165,6 +154,43 @@ static void airoha_wed_report(struct airoha_wed *wed)
 	}
 }
 
+/*
+ * Each WED instance has a companion WDMA instance (0x1fa06000 / 0x1fa06400)
+ * that the WED reads RX descriptors from. The WDMA has its own platform
+ * driver for the bring-up ring allocation; here we only need a plain mapping
+ * of the same window so the ops code can program WED's view of it.
+ *
+ * The address comes from the device tree rather than a hard-coded constant:
+ * of_address_to_resource() on the "en751221,wdma" node, index i. Uses
+ * devm_ioremap() and not devm_ioremap_resource() on purpose -- the latter
+ * would claim the memory region that airoha-wdma already owns.
+ */
+static void __iomem *airoha_wed_map_wdma(struct device *dev, int idx)
+{
+	struct device_node *np;
+	struct resource res;
+	void __iomem *base;
+	int ret;
+
+	np = of_find_compatible_node(NULL, NULL, "en751221,wdma");
+	if (!np)
+		return NULL;
+
+	ret = of_address_to_resource(np, idx, &res);
+	of_node_put(np);
+	if (ret)
+		return NULL;
+
+	base = devm_ioremap(dev, res.start, resource_size(&res));
+	if (!base)
+		return NULL;
+
+	dev_info(dev, "WED%d companion WDMA window at 0x%llx\n", idx,
+		 (unsigned long long)res.start);
+
+	return base;
+}
+
 static int airoha_wed_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -219,6 +245,11 @@ static int airoha_wed_probe(struct platform_device *pdev)
 		b->size = (unsigned long long)resource_size(res);
 		b->irq = platform_get_irq(pdev, i);	/* may be -ENXIO */
 		b->rev = airoha_wed_read(b, AIROHA_WED_REV);
+		b->wdma = airoha_wed_map_wdma(dev, i);
+		if (!b->wdma)
+			dev_warn(dev,
+				 "WED%d: no companion WDMA window, offload will refuse to attach\n",
+				 i);
 	}
 
 	airoha_wed_report(wed);
@@ -237,6 +268,13 @@ static int airoha_wed_probe(struct platform_device *pdev)
 		dev_warn(dev, "%d DT reg entries for wed_num=%d\n",
 			 nresource, wed->nbank);
 
+	/* Publish the ops table before mt7915 probes. This is what makes
+	 * mtk_wed_device_active() true for mt76 -- until it happens, mt7915's
+	 * forward path refuses to offload and Wi-Fi stays 100% software.
+	 * airoha_wed_ops_register() is a no-op unless wed_ops=1. */
+	airoha_wed_priv = wed;
+	airoha_wed_ops_register();
+
 	dev_info(dev, "probing done: %d instance(s), registers readable, dump at debugfs/%s/regs\n",
 		 wed->nbank, DRV_NAME);
 
@@ -247,6 +285,8 @@ static void airoha_wed_remove(struct platform_device *pdev)
 {
 	struct airoha_wed *wed = platform_get_drvdata(pdev);
 
+	airoha_wed_ops_unregister();
+	airoha_wed_priv = NULL;
 	debugfs_remove_recursive(wed->dbgfs);
 	dev_info(&pdev->dev, "detached\n");
 }
