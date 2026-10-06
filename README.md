@@ -15,9 +15,11 @@ diy-part2.sh    默认值定制：① 时区改中国（Asia/Shanghai, CST-8）
 configs/        每机型一份精简 diffconfig（约 440 行，需 make defconfig 展开）
 files/          自定义 rootfs 文件，会自动拷进源码（sbin/tempinfo + 两个 uci-defaults））
 packages/npu-clanker-template/   可选插件包的 Makefile 模板（占位符 @PKG_NAME@ 等）
+packages/npu-h3c-stock/          H3C HM2004-DU 原厂 NPU 镜像（npu_rv32.bin / npu_data.bin，未修改）
 scripts/        NPU 固件脚本：
                   build-npu-fw.sh         现编 ClankerNPU（拉源码 + riscv 工具链 + 体积自检）
                   gen-npu-fw-package.sh   把编出的镜像包成「可选插件包」
+                  gen-npu-h3c-package.sh  把 H3C 原厂镜像包成「可选插件包」
                   strip-default-npu-fw.sh 把 stock 固件从 target 的 DEFAULT_PACKAGES 里摘掉
                   apply-npu-dts.sh        给机型 DTS 补 WiFi 卸载保留内存区 / firmware-name
 ```
@@ -195,7 +197,38 @@ SHOW_PON_OPTICS=0    # 只显示温度（CPU / WiFi / PON）
 
 机型名写错会在 `Generate toolchain cache key` 步骤直接报 `::error::` 并退出，不会静默地全机型编译。
 
-## NPU 固件选择（stock / clanker / none）
+## 源码分支：必须是 ponwrt 的 `npu`
+
+MT7916 的 NPU 卸载补丁**直接推进了 `qwe3017/ponwrt` 的 `npu` 分支**，本仓库不再
+外挂注入任何 mt76 / kernel 补丁。所以 `branch` 输入的默认值是 `npu`，别改回去。
+
+编译前 CI 会用 `Verify NPU patches (MT7916 offload)` 步骤逐项确认源码树里有这四样，
+缺任一项直接 `::error::` 退出（不会让你刷完机才发现没编进去）：
+
+| 文件 | 作用 |
+|---|---|
+| `package/kernel/mt76/patches/113-mt7915-add-airoha-npu-offload-support.patch` | mt76 里 MT7915/MT7916 的 NPU 卸载实现（上游只有 mt7996） |
+| `package/kernel/mt76/Makefile` 含 `CONFIG_MT7915_NPU` | an7581 下打开该实现 |
+| `target/linux/airoha/patches-6.18/950-net-airoha-npu-skip-tx-regions-not-reserved-in-dt.patch` | 未预留的 TX 内存区不发对应命令，防 MT7916 固件拒命令挂死 mailbox |
+| `target/linux/airoha/dts/an7581-npu-mt7916.dtsi` | MT7916 的 NPU 保留内存区（只留 pkt + ba） |
+
+> ⚠ 另一个常见坑是 GitHub Actions 页面上的 **"Use workflow from"** 下拉：它决定
+> checkout 的是哪个分支。选错分支会拉到没有 workflow 改动（branch 默认还是 master）
+> 的那一份，等于白跑一轮。
+
+### WED / WDMA 要开吗？**不开。**
+
+`CONFIG_PACKAGE_kmod-airoha-wed` / `kmod-airoha-wdma` 与 NPU 是**两条互斥的下行路线**：
+
+- WED/WDMA：PPE → **PSE port 3 (GDM3)** → WED RX_DRV → MT7916
+- NPU：PPE → **PSE port 7 (CDM4/TDMA)** → NPU → MT7916
+
+两边抢同一个出口，而且 WED 那条在本机从未搬通过一个包（`RX0_PROCESSED_MIB` 恒 0、
+P3 堆包）。更实际的是：**ponwrt 源码里根本没有这两个包**（本仓库 6666 分支那套
+`airoha-wed` / `airoha-wdma` 模块没有合进 ponwrt），写进 `.config` 也只是被
+`defconfig` 静默丢弃的无效符号。走 NPU 路线就别碰它们。
+
+## NPU 固件选择（stock / h3c / clanker / none）
 
 NPU 是 Airoha SoC 里那颗 RISC-V 核，**不是** Linux 驱动 —— host 端驱动 `airoha_npu`
 随内核编出，它按固定名字找两个固件镜像：
@@ -210,8 +243,37 @@ NPU 是 Airoha SoC 里那颗 RISC-V 核，**不是** Linux 驱动 —— host �
 | 选项 | 行为 |
 |---|---|
 | `stock`（默认） | 用 ponwrt 自带包 `airoha-en7581-npu-firmware`（linux-firmware 里的镜像，MT7992 / **eagle** 数据面） |
+| `h3c` | 用 H3C HM2004-DU 原厂镜像（仓库自带，配 MT7916 出厂的那份），见下节 |
 | `clanker` | 用 [ClankerNPU](https://github.com/ClankerConstruction/ClankerNPU) 现编，变体由 `npu_wifi` 决定 |
 | `none` | 不装任何固件（NPU 不起，只剩有线软件转发） |
+
+### H3C 原厂镜像（`npu_fw=h3c`）
+
+`packages/npu-h3c-stock/` 里放的是从 H3C HM2004-DU 原厂系统 `/userfs` 原样取出的
+两份镜像（未做任何修改，md5 在脚本里每次校验）：
+
+| 文件 | 大小 | md5 |
+|---|---|---|
+| `npu_rv32.bin` | 90644 B | `e2551187360799dadaea241f4973d80a` |
+| `npu_data.bin` | 2764 B | `18849de11feb56c008742fcb50576ecf` |
+
+生成的包名为 `airoha-en7581-mt7916-h3c-npu-firmware`，勾选方式同 ClankerNPU：
+
+```sh
+CONFIG_PACKAGE_airoha-en7581-mt7916-h3c-npu-firmware=y
+```
+
+**和 stock / clanker 的关键差异**——体积只有 ~90KB（ClankerNPU 现编约 2MB）不是损坏，
+它跑的是**配 MT7916 的裁剪版 NPU 固件**：
+
+- 不支持专用 NPU ring / HW-RRO / TX 数据面（固件里对应的 mailbox wrapper 直接打
+  `"not support on 791X"`），下行走 **TDMA 快转**；
+- 因此它是 MT7916 上一张「厂商自己跑通过」的对照卡：如果 `stock` 那份
+  linux-firmware 镜像起不来，用它做 A/B，就能区分「镜像不支持 MT7916」还是
+  「host 驱动 / DTS 有问题」。
+
+原厂镜像本名就是 `npu_rv32.bin` / `npu_data.bin`，安装时按驱动默认前缀
+（`en7581`）改名落盘，所以**不用改 DTS 的 `firmware-name`**。
 
 ### ClankerNPU 固件现在是「可选插件包」
 
@@ -248,7 +310,7 @@ ClankerNPU 包同时进 rootfs —— 两个包装的是同一批文件名，谁
 
 | 输入 | 默认 | 说明 |
 |---|---|---|
-| `npu_fw` | `stock` | `stock` / `clanker` / `none` |
+| `npu_fw` | `stock` | `stock` / `h3c` / `clanker` / `none` |
 | `npu_wifi` | `auto` | 变体：`auto` 按机型推断，或手动选 `MT7916` `MT7992` `MT7996` `MT7991` `MT7993` `NOWIFI`；`all` = 该 SoC 所有变体都编成可选包，只默认勾一个 |
 | `npu_default_wifi` | `MT7916` | `npu_wifi=all` 时默认勾选哪个变体 |
 | `npu_clanker` | `0` | `1` = 适配 Clanker 自改的 host driver。**配 ponwrt 自带驱动必须保持 0** |

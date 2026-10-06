@@ -71,6 +71,30 @@ case "$PROFILE" in
 esac
 
 # ------------------------------------------------------------------
+# 该机型若已自带 MT7916 专用那份 dtsi，就不要再叠 clanker 这份。
+#
+#   an7581-npu-clanker.dtsi -> an7581-npu-wlan.dtsi 把 pkt / tx-pkt /
+#   tx-bufid / ba 四块全 reserve 上；而 MT7916 的 NPU 固件没有 TX 数据面
+#   （"not support on 791X"），内核补丁
+#     950-net-airoha-npu-skip-tx-regions-not-reserved-in-dt.patch
+#   正是靠「tx-pkt / tx-bufid 未预留」来决定不发那两条 TX 命令。
+#   这里补上去，驱动就会把固件不认识的命令发出去，mailbox 直接挂死，
+#   后面连 sta 关联时的 MacTable DEL_STA 都超时 —— WiFi 卸载全废。
+#
+#   an7581-npu-mt7916.dtsi 只留 pkt + ba，才是 MT7916 要的那份。
+# ------------------------------------------------------------------
+for t in $TARGETS; do
+  f="$DTS_DIR/$t"
+  [ -f "$f" ] || continue
+  if grep -q 'an7581-npu-mt7916.dtsi' "$f"; then
+    echo "::notice::$t 已包含 an7581-npu-mt7916.dtsi（只留 pkt+ba），"
+    echo "::notice::不再叠加 an7581-npu-clanker.dtsi —— 否则 tx-pkt/tx-bufid 被预留，"
+    echo "::notice::驱动会向 MT7916 固件发它不支持的 TX 命令并挂死 mailbox。"
+    exit 0
+  fi
+done
+
+# ------------------------------------------------------------------
 # 生成 dtsi
 # ------------------------------------------------------------------
 DTSI="$DTS_DIR/an7581-npu-clanker.dtsi"

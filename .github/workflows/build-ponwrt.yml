@@ -15,7 +15,12 @@ env:
   USE_CCACHE: false                    
   TZ: Asia/Shanghai
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  REPO_BRANCH: ${{ github.event.inputs.branch || 'master' }}
+  # ★ 本分支（npu）编的就是 ponwrt 的 npu 分支：MT7916 的 NPU 卸载补丁
+  #   （mt76 113 / kernel 950 / an7581-npu-mt7916.dtsi / CONFIG_MT7915_NPU）
+  #   已经直接推进了 ponwrt 源码树，本仓库不再外挂注入，所以这里必须指 npu。
+  #   指回 master 会编出「有 NPU 栈但没人驱动 MT7916」的固件 —— 见下面的
+  #   Verify NPU patches 步骤，它会在这种情况下直接报错。
+  REPO_BRANCH: ${{ github.event.inputs.branch || 'npu' }}
   SOC: ${{ github.event.inputs.soc || 'an7581' }}
   PROFILE: ${{ github.event.inputs.profile || 'fiberhome_hg5585f-ct' }}
   BUILD_SCOPE: ${{ github.event.inputs.scope || 'firmware' }}
@@ -49,9 +54,9 @@ on:
           - fork
           - pbs05/ponwrt
       branch:
-        description: 'ponwrt 源码分支'
+        description: 'ponwrt 源码分支（MT7916 NPU 补丁已在 ponwrt 的 npu 分支里，默认别改）'
         required: true
-        default: 'master'
+        default: 'npu'
       soc:
         description: 'SoC 平台'
         required: true
@@ -96,12 +101,13 @@ on:
           - 'false'
           - 'true'
       npu_fw:
-        description: 'NPU 固件来源 (stock=仓库自带 linux-firmware；clanker=用 ClankerNPU 现编)'
+        description: 'NPU 固件来源 (stock=linux-firmware 官方；h3c=H3C 原厂镜像；clanker=ClankerNPU 现编)'
         required: true
         default: 'stock'
         type: choice
         options:
           - stock
+          - h3c
           - clanker
           - none
       npu_wifi:
@@ -318,6 +324,70 @@ jobs:
         cd openwrt && echo "commit: $(git rev-parse --short HEAD)"
 
     # =========================================================
+    # 2.5 校验源码树里真的有 MT7916 NPU 卸载补丁
+    #
+    #     这些补丁是直接推进 qwe3017/ponwrt 的 npu 分支的，本仓库不再外挂
+    #     注入。于是「编出来没效果」的唯一原因就是拉错了分支（跑 workflow
+    #     时 "Use workflow from" 选错、或 branch 手填回 master）—— 而这类
+    #     问题到刷机后才发现，一次要浪费一整轮构建。这里提前拦住。
+    #
+    #     缺任何一项都直接失败，并打印补法。
+    # =========================================================
+    - name: Verify NPU patches (MT7916 offload)
+      run: |
+        set -uo pipefail
+        cd "$BUILD_ROOT/openwrt"
+        SRC_SHA="$(git rev-parse --short HEAD)"
+        SRC_SHA_FULL="$(git rev-parse HEAD)"
+        echo "SOURCE_SHA=$SRC_SHA" >> "$GITHUB_ENV"
+        echo "SOURCE_SHA_FULL=$SRC_SHA_FULL" >> "$GITHUB_ENV"
+
+        MISSING=0
+        chk() { # chk <说明> <路径> [grep 模式]
+          local desc="$1" path="$2" pat="${3:-}"
+          if [ ! -e "$path" ]; then
+            echo "::error::缺 $path —— $desc"
+            MISSING=1
+            return
+          fi
+          if [ -n "$pat" ] && ! grep -q "$pat" "$path"; then
+            echo "::error::$path 里找不到「$pat」 —— $desc"
+            MISSING=1
+            return
+          fi
+          echo "  ✔ $desc"
+        }
+
+        echo "== 源码 ${REPO_URL} @ ${REPO_BRANCH} (${SRC_SHA}) =="
+        chk "mt76: MT7915/MT7916 的 NPU 卸载实现" \
+            package/kernel/mt76/patches/113-mt7915-add-airoha-npu-offload-support.patch
+        chk "mt76: an7581 打开 CONFIG_MT7915_NPU" \
+            package/kernel/mt76/Makefile "CONFIG_MT7915_NPU"
+        chk "kernel: TX 保留区未预留时跳过对应命令" \
+            target/linux/airoha/patches-6.18/950-net-airoha-npu-skip-tx-regions-not-reserved-in-dt.patch
+        chk "dts: MT7916 的 NPU 保留内存区" \
+            target/linux/airoha/dts/an7581-npu-mt7916.dtsi
+
+        # HG5585F 必须真的 include 了那份 dtsi，否则保留内存没有生效
+        case "$PROFILE" in
+          fiberhome_hg5585f-ct|fiberhome_hg5585f-cu|all)
+            chk "HG5585F 引用 an7581-npu-mt7916.dtsi" \
+                target/linux/airoha/dts/an7581-fiberhome-hg5585f-common.dtsi \
+                "an7581-npu-mt7916.dtsi" ;;
+        esac
+
+        if [ "$MISSING" != "0" ]; then
+          echo "::error::源码树缺少 MT7916 NPU 卸载补丁。"
+          echo "  最常见原因：跑 workflow 时 'Use workflow from' 没选本分支，"
+          echo "  或 branch 手填成了 master。当前 branch=${REPO_BRANCH}"
+          echo "  补丁在 qwe3017/ponwrt 的 npu 分支里（commit 69bbd78d58），"
+          echo "  把 branch 改回 npu 再跑即可。"
+          exit 1
+        fi
+        echo "✅ MT7916 NPU 卸载补丁齐全"
+        echo "NPU_PATCHES_OK=1" >> "$GITHUB_ENV"
+
+    # =========================================================
     # 3. dl 下载缓存
     # =========================================================
     - name: Cache dl directory
@@ -329,9 +399,9 @@ jobs:
         # 按分支 + 周号：同一周内复用同一条目。
         # 原先用 github.run_number → 每次运行都 save 一份新副本，
         # 10GB 配额会被迅速刷满并淘汰掉有用的旧缓存。
-        key: ponwrt-dl-${{ env.SOURCE }}-${{ github.event.inputs.branch || 'master' }}-${{ steps.resolve.outputs.week }}
+        key: ponwrt-dl-${{ env.SOURCE }}-${{ github.event.inputs.branch || 'npu' }}-${{ steps.resolve.outputs.week }}
         restore-keys: |
-          ponwrt-dl-${{ env.SOURCE }}-${{ github.event.inputs.branch || 'master' }}-
+          ponwrt-dl-${{ env.SOURCE }}-${{ github.event.inputs.branch || 'npu' }}-
         # 关键：即使后面编译失败也要保住已下载的源码包
         save-always: true
 
@@ -456,6 +526,79 @@ jobs:
         cat "$REPO_DIR/.clanker-build/npu-fw.env"
         echo "----- 变体清单 -----"
         cat "$REPO_DIR/.clanker-build/npu-fw-packages.txt"
+
+    # =========================================================
+    # 5.6 NPU 固件 = H3C 原厂镜像
+    #
+    #     与 5.5 完全同构，只是镜像不现编：直接用随仓库入库的
+    #       packages/npu-h3c-stock/npu_rv32.bin   (90644 B)
+    #       packages/npu-h3c-stock/npu_data.bin   ( 2764 B)
+    #     这两份来自 H3C HM2004-DU 原厂系统的 /userfs，是该机型厂商自己
+    #     配 MT7916 出厂在跑的那份。
+    #
+    #     ⚠ 与 stock / clanker 的差异（选之前必须知道）：
+    #       原厂 rv32 只有 ~90KB（Clanker 现编约 2MB），跑的是裁剪版 NPU
+    #       固件 —— 不支持专用 NPU ring / HW-RRO / TX 数据面（固件里对应
+    #       mailbox wrapper 直接打 "not support on 791X"），下行走 TDMA
+    #       快转。所以它是 MT7916 上的一张「已知可用对照」，用来判断
+    #       linux-firmware 官方那份 en7581 镜像到底支不支持 MT7916。
+    # =========================================================
+    - name: Build NPU firmware package (H3C stock)
+      if: env.NPU_FW == 'h3c' && env.BUILD_SCOPE != 'toolchain-only'
+      run: |
+        set -euo pipefail
+        cd "$BUILD_ROOT/openwrt"
+        REPO_DIR="$GITHUB_WORKSPACE"
+        SOC_UP=$(echo "$SOC" | tr 'a-z' 'A-Z')
+        chmod +x "$REPO_DIR"/scripts/*.sh
+
+        # WIFI=all 时按默认变体装；原厂镜像本身不区分变体，
+        # 变体名只进包名和包描述。
+        DTS_WIFI="$NPU_WIFI"
+        [ "$NPU_WIFI" = "all" ] && DTS_WIFI="$NPU_DEFAULT_WIFI"
+
+        SOC="$SOC_UP" WIFI="$DTS_WIFI" FW_PREFIX="$NPU_FW_PREFIX" \
+        WORK="$REPO_DIR/.clanker-build" PKG_OUT_DIR="package/custom" PONWRT_DIR=. \
+          bash "$REPO_DIR/scripts/gen-npu-h3c-package.sh"
+
+        . "$REPO_DIR/.clanker-build/npu-h3c.env"
+        echo "NPU_PKG=$NPU_PKG" >> "$GITHUB_ENV"
+        echo "NPU_FW_SOURCE=h3c" >> "$GITHUB_ENV"
+
+        echo "===== 生成的 H3C 原厂 NPU 固件包 ====="
+        ls -1 package/custom | grep 'npu-firmware' \
+          || { echo "::error::package/custom 下没有 NPU 包"; exit 1; }
+        ls -l "package/custom/$NPU_PKG/src/"
+
+        # 索引重建（与 clanker 同：只删 tmp/.packageinfo 不够，还得删 stamp）
+        rm -f tmp/.packageinfo tmp/.targetinfo
+        rm -f tmp/info/.scan-packageinfo.stamp tmp/info/.scan-targetinfo.stamp
+        rm -f tmp/.config-package.in tmp/.config-target.in
+
+        echo ">>> make prepare-tmpinfo（重新扫描 package/ 树）"
+        make -s prepare-tmpinfo OPENWRT_BUILD= 2>&1 | tail -5 || true
+
+        if ! grep -qx "Package: $NPU_PKG" tmp/.packageinfo 2>/dev/null; then
+          echo "::error::$NPU_PKG 未进入 tmp/.packageinfo，defconfig 会把 .config 里的 =y 静默剔除"
+          echo "  1) 包目录:   $([ -d "package/custom/$NPU_PKG" ] && echo '存在' || echo '不存在')"
+          echo "  2) Makefile: $([ -f "package/custom/$NPU_PKG/Makefile" ] && echo '存在' || echo '不存在')"
+          echo "  3) 包内镜像:"; ls -l "package/custom/$NPU_PKG/src/" 2>/dev/null || echo "     (无)"
+          for f in "logs/package/custom/$NPU_PKG/dump.txt" "logs/package/$NPU_PKG/dump.txt"; do
+            [ -f "$f" ] && { echo "===== $f ====="; tail -30 "$f"; }
+          done
+          exit 1
+        fi
+        echo "✅ $NPU_PKG 已进入 tmp/.packageinfo"
+
+        # DTS：固件名非默认时写 firmware-name；MT7916 机型已有
+        # an7581-npu-mt7916.dtsi 时脚本会自动跳过补内存区（防 tx-pkt/tx-bufid
+        # 被预留后驱动发出 MT7916 不支持的 TX 命令）。
+        SOC="$SOC" PROFILE="$PROFILE" WIFI="$DTS_WIFI" \
+        FW_PREFIX="$NPU_FW_PREFIX" ADD_WLAN_MEM="$NPU_WLAN_MEM" \
+        PONWRT_DIR=. bash "$REPO_DIR/scripts/apply-npu-dts.sh"
+
+        echo "===== H3C 原厂 NPU 固件元信息 ====="
+        cat "$REPO_DIR/.clanker-build/npu-h3c.env"
 
     # =========================================================
     # 6. 加载 .config —— 源码基座 defconfig 打底 + 机型精简配置追加
@@ -583,6 +726,20 @@ jobs:
             fi
             echo "✅ NPU 固件 = clanker  ->  CONFIG_PACKAGE_${SEL}=y"
             ;;
+          h3c)
+            # 用户在 configs/ 里手动勾的优先；否则用 5.6 步导出的包名
+            for sym in $ALL; do
+              is_stock "$sym" && continue
+              case "$sym" in *-h3c-npu-firmware) ;; *) continue ;; esac
+              if grep -q "^CONFIG_PACKAGE_${sym}=y" .config; then SEL="$sym"; break; fi
+            done
+            [ -z "$SEL" ] && [ -n "${NPU_PKG:-}" ] && SEL="$NPU_PKG"
+            if [ -z "$SEL" ]; then
+              echo "::error::npu_fw=h3c 但选不出固件包（NPU_PKG 为空且 configs 里没手动勾）"
+              exit 1
+            fi
+            echo "✅ NPU 固件 = h3c（H3C 原厂镜像） ->  CONFIG_PACKAGE_${SEL}=y"
+            ;;
           none)
             echo "::warning::npu_fw=none：不装任何 NPU 固件，NPU 不会起来（只剩有线软件转发）"
             ;;
@@ -681,9 +838,13 @@ jobs:
         # 所以这里必须显式确认，并打印排查线索。
         # =========================================================
         SEL="${NPU_FW_SYMBOL:-}"
-        if [ "${NPU_FW}" = "clanker" ] && [ "${BUILD_SCOPE}" != "toolchain-only" ]; then
-          if [ -z "$SEL" ] || ! grep -q "^CONFIG_PACKAGE_${SEL}=y" .config; then
-            echo "::error::ClankerNPU 可选包 ${SEL:-<空>} 在 defconfig 后未启用"
+        # clanker 与 h3c 走同一套校验：两者都是「可选包顶掉 stock 包」，
+        # 都必须确认自己 =y 且 stock 那几个 =n，否则两个包装同一批文件名。
+        if [ "${NPU_FW}" = "clanker" ] || [ "${NPU_FW}" = "h3c" ]; then
+          if [ "${BUILD_SCOPE}" = "toolchain-only" ]; then
+            echo ">>> toolchain-only，跳过 NPU 固件包校验"
+          elif [ -z "$SEL" ] || ! grep -q "^CONFIG_PACKAGE_${SEL}=y" .config; then
+            echo "::error::NPU 固件可选包 ${SEL:-<空>}（${NPU_FW}）在 defconfig 后未启用"
             echo "  --- 排查线索 ---"
             echo "  1) 包目录:        $([ -d "package/custom/${SEL}" ] && echo '存在' || echo '不存在')"
             echo "  2) 包内镜像:      $(ls -1 "package/custom/${SEL}/src/" 2>/dev/null | tr '\n' ' ')"
@@ -693,11 +854,11 @@ jobs:
             ls -l "package/custom/${SEL}/src/" 2>/dev/null || echo "     (无)"
             exit 1
           fi
-          echo "✅ NPU 固件包已启用: CONFIG_PACKAGE_${SEL}=y"
+          echo "✅ NPU 固件包已启用 (${NPU_FW}): CONFIG_PACKAGE_${SEL}=y"
           ls -l "package/custom/${SEL}/src/" 2>/dev/null || true
 
           if grep -qE '^CONFIG_(PACKAGE|DEFAULT|MODULE_DEFAULT)_airoha-(en7581|en7581-mt7996|an7583)-npu-firmware=[ym]' .config; then
-            echo "::warning::stock NPU 固件符号仍有 =y —— 与 ClankerNPU 包装同一批文件名"
+            echo "::warning::stock NPU 固件符号仍有 =y —— 与 ${NPU_FW} 包装同一批文件名"
             grep -nE '^CONFIG_(PACKAGE|DEFAULT|MODULE_DEFAULT)_airoha-(en7581|en7581-mt7996|an7583)-npu-firmware=[ym]' .config || true
             echo "  → 检查 4.5 步的 DEFAULT_PACKAGES 摘除是否生效（日志里应有『已从 … 摘掉』）"
           else
@@ -1118,8 +1279,9 @@ jobs:
           echo "| 分支 | \`${REPO_BRANCH}\` |"
           echo "| 提交 | \`$(cd "$BUILD_ROOT"/openwrt && git rev-parse --short HEAD)\` |"
           echo "| 编译时间 | $(date '+%Y-%m-%d %H:%M:%S') (Shanghai) |"
-          echo "| NPU 固件 | \`${NPU_FW}\`$( [ "$NPU_FW" = "clanker" ] && echo " (${NPU_WIFI}, ClankerNPU)" ) |"
+          echo "| NPU 固件 | \`${NPU_FW}\`$( [ "$NPU_FW" = "clanker" ] && echo " (${NPU_WIFI}, ClankerNPU)" )$( [ "$NPU_FW" = "h3c" ] && echo " (${NPU_WIFI}, H3C 原厂镜像)" ) |"
           [ -n "${NPU_FW_SYMBOL:-}" ] && echo "| NPU 固件包 | \`${NPU_FW_SYMBOL}\` (CONFIG_PACKAGE_...=y) |"
+          echo "| MT7916 NPU 补丁 | $( [ "${NPU_PATCHES_OK:-}" = "1" ] && echo '✅ 已校验齐全' || echo '⚠ 未校验' ) |"
           echo ""
 
           # NPU 固件用 ClankerNPU 现编时，把版本/变体/校验写进 Release 便于回溯
@@ -1139,6 +1301,28 @@ jobs:
               echo "| npu_rv32.bin | ${NPU_RV32_SIZE} bytes (上限 2097152) |"
               echo "| npu_data.bin | ${NPU_DATA_SIZE} bytes (上限 65536) |"
               echo "| CLANKER | \`${NPU_CLANKER}\` |"
+              echo ""
+            } >> release.txt
+          fi
+
+          # NPU 固件用 H3C 原厂镜像时，把来源/校验写进 Release 便于回溯
+          if [ "$NPU_FW" = "h3c" ] && [ -f "$GITHUB_WORKSPACE/.clanker-build/npu-h3c.env" ]; then
+            # shellcheck disable=SC1091
+            . "$GITHUB_WORKSPACE/.clanker-build/npu-h3c.env"
+            {
+              echo "### NPU 固件 (H3C 原厂镜像)"
+              echo "| 项目 | 详情 |"
+              echo "|------|------|"
+              echo "| SoC | \`${NPU_SOC}\` |"
+              echo "| WiFi 变体 | \`${NPU_WIFI}\` |"
+              echo "| 来源 | H3C HM2004-DU 原厂 /userfs（未修改） |"
+              echo "| 固件名前缀 | \`${NPU_FW_PREFIX}\` |"
+              echo "| 可选包名 | \`${NPU_PKG:-}\` |"
+              echo "| npu_rv32.bin | ${NPU_RV32_SIZE} bytes  md5 \`${NPU_RV32_MD5}\` |"
+              echo "| npu_data.bin | ${NPU_DATA_SIZE} bytes  md5 \`${NPU_DATA_MD5}\` |"
+              echo ""
+              echo "> 原厂固件是配 MT7916 的裁剪版：无专用 NPU ring / HW-RRO / TX 数据面，"
+              echo "> 下行走 TDMA 快转。体积约 90KB（ClankerNPU 现编约 2MB）属正常，不是损坏。"
               echo ""
             } >> release.txt
           fi
