@@ -26,7 +26,7 @@ env:
   BUILD_SCOPE: ${{ github.event.inputs.scope || 'firmware' }}
   IGNORE_CACHE: ${{ github.event.inputs.ignore_cache || 'false' }}
   # ---- NPU 固件（RISC-V 裸机固件，由工作流按机型现编或沿用仓库自带）----
-  NPU_FW: ${{ github.event.inputs.npu_fw || 'stock' }}
+  NPU_FW: ${{ github.event.inputs.npu_fw || 'r65' }}
   NPU_WIFI: ${{ github.event.inputs.npu_wifi || 'auto' }}
   NPU_CLANKER: ${{ github.event.inputs.npu_clanker || '0' }}
   NPU_FW_PREFIX: ${{ github.event.inputs.npu_fw_prefix || '' }}
@@ -113,11 +113,12 @@ on:
         options:
           - npu
       npu_fw:
-        description: 'NPU 固件来源 (stock=linux-firmware 官方；h3c=H3C 原厂镜像；clanker=ClankerNPU 现编)'
+        description: 'NPU 固件来源 (r65=ponwrt 自带 ClankerNPU 源码编译，配 r65 驱动栈 ★推荐；stock=linux-firmware 官方；h3c=H3C 原厂镜像；clanker=ClankerNPU 现编；none=不装)'
         required: true
-        default: 'stock'
+        default: 'r65'
         type: choice
         options:
+          - r65
           - stock
           - h3c
           - clanker
@@ -755,6 +756,15 @@ jobs:
             fi
             echo "✅ NPU 固件 = h3c（H3C 原厂镜像） ->  CONFIG_PACKAGE_${SEL}=y"
             ;;
+          r65)
+            # ponwrt npu 分支自带：package/firmware/airoha-clanker-npu 从源码编
+            # （ClankerNPU @735529c + 46 个 r65 补丁，SOC=AN7581 WIFI=MT7916
+            #  NPUTX=1），与内核 931-983 / mt76 120-179 是同一套 ABI。
+            # 不能跟 stock 固件混用：stock 是 Eagle/原厂 ABI，r65 驱动会
+            # 按 airoha,clanker-kite-abi 去问它不支持的 GET_WAIT/SET_WAIT。
+            SEL="airoha-en7581-clanker-mt7916-npu"
+            echo "✅ NPU 固件 = r65（ponwrt 自带 ClankerNPU 源码编译包） ->  CONFIG_PACKAGE_${SEL}=y"
+            ;;
           none)
             echo "::warning::npu_fw=none：不装任何 NPU 固件，NPU 不会起来（只剩有线软件转发）"
             ;;
@@ -891,9 +901,9 @@ jobs:
         # 所以这里必须显式确认，并打印排查线索。
         # =========================================================
         SEL="${NPU_FW_SYMBOL:-}"
-        # clanker 与 h3c 走同一套校验：两者都是「可选包顶掉 stock 包」，
-        # 都必须确认自己 =y 且 stock 那几个 =n，否则两个包装同一批文件名。
-        if [ "${NPU_FW}" = "clanker" ] || [ "${NPU_FW}" = "h3c" ]; then
+        # r65 走同一套校验：也是「可选包顶掉 stock 包」，必须确认自己 =y
+        # 且 stock 那几个 =n，否则两个包装同一批文件名。
+        if [ "${NPU_FW}" = "clanker" ] || [ "${NPU_FW}" = "h3c" ] || [ "${NPU_FW}" = "r65" ]; then
           if [ "${BUILD_SCOPE}" = "toolchain-only" ]; then
             echo ">>> toolchain-only，跳过 NPU 固件包校验"
           elif [ -z "$SEL" ] || ! grep -q "^CONFIG_PACKAGE_${SEL}=y" .config; then
