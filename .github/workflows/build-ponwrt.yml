@@ -946,17 +946,24 @@ jobs:
         grep -n "npu-firmware" .config || echo "(无)"
 
         # =========================================================
-        # 选中的 NPU 固件包必须在 defconfig 之后依然 =y。
+        # 选中的 NPU 固件包必须在 defconfig 之后依然是 =y 或 =m。
         # 若包没进索引，defconfig 会静默删掉符号（不报错、固件里没这个包），
         # 所以这里必须显式确认，并打印排查线索。
+        #
+        # ⚠ 必须同时接受 =m：airoha-en7581-clanker-mt7916-npu 已经写进了
+        #   HG5585F 的 DEVICE_PACKAGES（an7581.mk），属于「被依赖拉进来」的包，
+        #   defconfig 会把它解析成 =m 而不是 =y —— ponwrt 自带的参考配置
+        #   configs/an7581-hg5585f-wifi-offload.config 里就是 =m。
+        #   =y 与 =m 都会装进 rootfs，只认 =y 会在这里假失败。
         # =========================================================
         SEL="${NPU_FW_SYMBOL:-}"
-        # r65 走同一套校验：也是「可选包顶掉 stock 包」，必须确认自己 =y
-        # 且 stock 那几个 =n，否则两个包装同一批文件名。
+        # r65 走同一套校验：必须确认自己已启用，且 stock 那几个没被一起打开。
+        # （r65 的包装的是 en7581_MT7916_npu_*.bin，与 stock 的 en7581_npu_*.bin
+        #  不重名，所以严格说不会撞文件；参考配置里两者也是并存的。）
         if [ "${NPU_FW}" = "clanker" ] || [ "${NPU_FW}" = "h3c" ] || [ "${NPU_FW}" = "r65" ]; then
           if [ "${BUILD_SCOPE}" = "toolchain-only" ]; then
             echo ">>> toolchain-only，跳过 NPU 固件包校验"
-          elif [ -z "$SEL" ] || ! grep -q "^CONFIG_PACKAGE_${SEL}=y" .config; then
+          elif [ -z "$SEL" ] || ! grep -qE "^CONFIG_PACKAGE_${SEL}=[ym]$" .config; then
             echo "::error::NPU 固件可选包 ${SEL:-<空>}（${NPU_FW}）在 defconfig 后未启用"
             echo "  --- 排查线索 ---"
             echo "  1) 包目录:        $([ -d "package/custom/${SEL}" ] && echo '存在' || echo '不存在')"
@@ -967,7 +974,9 @@ jobs:
             ls -l "package/custom/${SEL}/src/" 2>/dev/null || echo "     (无)"
             exit 1
           fi
-          echo "✅ NPU 固件包已启用 (${NPU_FW}): CONFIG_PACKAGE_${SEL}=y"
+          echo "✅ NPU 固件包已启用 (${NPU_FW}): $(grep -E "^CONFIG_PACKAGE_${SEL}=[ym]$" .config)"
+          # r65 的包在 ponwrt 源码树里（package/firmware/airoha-clanker-npu），
+          # 不在 package/custom/ —— 那是 npu_fw=clanker 自己编的包才走的路。
           ls -l "package/custom/${SEL}/src/" 2>/dev/null || true
 
           if grep -qE '^CONFIG_(PACKAGE|DEFAULT|MODULE_DEFAULT)_airoha-(en7581|en7581-mt7996|an7583)-npu-firmware=[ym]' .config; then
