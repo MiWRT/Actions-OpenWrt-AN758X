@@ -202,109 +202,60 @@ SHOW_PON_OPTICS=0    # 只显示温度（CPU / WiFi / PON）
 MT7916 的 NPU 卸载补丁**直接推进了 `qwe3017/ponwrt` 的 `npu` 分支**，本仓库不再
 外挂注入任何 mt76 / kernel 补丁。所以 `branch` 输入的默认值是 `npu`，别改回去。
 
-编译前 CI 会用 `Verify NPU patches (MT7916 offload)` 步骤逐项确认源码树里有这四样，
+编译前 CI 会用 `Verify NPU patches (MT7916 offload)` 步骤逐项确认源码树里有下面这些，
 缺任一项直接 `::error::` 退出（不会让你刷完机才发现没编进去）：
 
 | 文件 | 作用 |
 |---|---|
-| `package/kernel/mt76/patches/113-mt7915-add-airoha-npu-offload-support.patch` | mt76 里 MT7915/MT7916 的 NPU 卸载实现（上游只有 mt7996） |
+| `package/kernel/mt76/patches/120-mt76-add-airoha-mt7915-kite-npu.patch` | mt76 里 MT7915/MT7916 的 Kite NPU 卸载实现（r65 系列 120–179 的第一个） |
 | `package/kernel/mt76/Makefile` 含 `CONFIG_MT7915_NPU` | an7581 下打开该实现 |
-| `target/linux/airoha/patches-6.18/950-net-airoha-npu-skip-tx-regions-not-reserved-in-dt.patch` | 未预留的 TX 内存区不发对应命令，防 MT7916 固件拒命令挂死 mailbox |
-| `target/linux/airoha/dts/an7581-npu-mt7916.dtsi` | MT7916 的 NPU 保留内存区（只留 pkt + ba） |
+| 同上，含 `npu_control=Y` | 模块参数真正打开 NPU（`wed_enable=Y` 是从 filogic 照抄的空转参数） |
+| `patches-6.18/933-net-airoha-npu-kite-memory-profile.patch` | Kite 内存 profile；TX 区未预留就跳过对应命令 |
+| `patches-6.18/944-airoha-kite-ppe-flowtable-datapath.patch` | PPE + flowtable 下行数据面，r65 这套的核心 |
+| `target/linux/airoha/dts/an7581-npu-mt7916.dtsi` | MT7916 的 NPU 保留内存区（pkt + ba，0x92000000/0x94c00000）+ `airoha,clanker-kite-abi` |
+| `package/firmware/airoha-clanker-npu/Makefile` | NPU 固件从源码现编（ClankerNPU），不是 linux-firmware 里的那份 |
+| `package/devel/airoha-riscv-toolchain/Makefile` | 编 NPU 固件要的 host 工具链 |
+
+同时会**反向校验**旧的 `113-mt7915-add-airoha-npu-offload-support.patch` 和
+`950-net-airoha-npu-skip-tx-regions-not-reserved-in-dt.patch` 已经不在了 ——
+它们和 r65 的补丁都新建 `mt7915/npu.c`，不可能共存。若还在，说明拉到了合并前的树。
+
+> 这套栈是 2026-10-06 整体合并上游 `ntp2000/ponwrt` 的 `port/r65-npu-wifi`
+> （merge 提交 `93943d57e1`）换来的，是一个整体 ABI，别只挑其中几个补丁。
 
 > ⚠ 另一个常见坑是 GitHub Actions 页面上的 **"Use workflow from"** 下拉：它决定
 > checkout 的是哪个分支。选错分支会拉到没有 workflow 改动（branch 默认还是 master）
 > 的那一份，等于白跑一轮。
 
-## Wi-Fi 卸载：下行走 WED，上行走 NPU
+## Wi-Fi 卸载：只有 NPU（Clanker/Kite），WED 已摘除
 
-**方向以「连 WiFi 的终端」为准**：下行 = 终端接收，上行 = 终端发出。
+**2026-10-06 结论：WED 路线已判死刑，本仓库不再注入任何 WED 代码。**
+卸载栈整体换成了上游 `ntp2000/ponwrt` 的 `port/r65-npu-wifi`
+（merge 提交 `93943d57e1`）—— 它 `NET_VENDOR_MEDIATEK` 是关的，根本不用 WED，
+下行和上行都走 NPU + PPE flowtable 数据面。
 
-原厂这两个方向是**两个不同的加速器各管一条**，不是二选一：
+判死刑的依据是三条实测，不是推测：
 
-```
-下行 (终端接收):
-  PPE/FOE --force_port=P3(GDM3)--> WDMA --> WED --> PCIe --> MT7916 --> 空口
-                                    ^^^^ 这一截是我们要补的全部工作量
+1. WED 四件套真的编进固件了：`airoha_wed` / `airoha_wdma` 都在 `lsmod` 里，
+   `1fa02000.wed` / `1fa06000.wdma` 都在，`WED_REV=0x76220001` 读得到，
+   `mtk_soc_wed_ops published`。
+2. **干跑（`attach_enable=0`）寄存器全对**：`PCIE_CFG_BASE=0x1fc20000`
+   （pcie1 = 7906 ✓）、`WDMA CFG_BASE=0x1fa00000` ✓、
+   `WED_PCIE_INT_CTRL=0x00101000`（= H3C 原厂值）✓、`wpdma_phys=0x241d7000`，
+   而且设备活得很好 ⇒ 配置不是病根。
+3. **真 attach（`attach_enable=1`）把设备打重启**。对照实验里 `wed_enable=N`
+   做同样的 PCI remove/rescan 完全正常 ⇒ 崩在 attach 成功之后的路径。
 
-上行 (终端发出):
-  WiFi rx ring --> NPU 固件 BA 重排 --> TDMA tx --> PPE --> 有线口
-                    （NPU 固件自带，不依赖 Linux flowtable，已经在跑）
-```
+另外 mt76 的 `wed_enable` 默认就是 `N`（我们只给 filogic 段加了 `=Y`，
+airoha 没有），所以之前那些「WED 没效果」的构建里 WED 从头到尾没 attach 过。
+r65 的 `MODPARAMS.mt7915e` 里那个 `wed_enable=Y` 只是从 filogic 照抄的空转参数，
+真正起作用的是 `npu_control=Y npu_enable=Y npu_tx=Y`。
 
-出处：`WED_DOWNLINK_PLAN.md` §三的实机结论（「上行已经在跑」）；NPU 固件反汇编里
-`tdma_tx_init` 真实存在并打印 `INTR_TDMA_0` / `INTR_PPE_WIFI_BUF_ID`。
+> 旧的 `packages/airoha-wed/` 和 `patches/kernel-wed/`（960–964）已删除，
+> `wifi_offload` 只剩 `npu` 一个选项，传 `both` / `wed` 会直接报错退出。
+> 需要回看历史的话在 git 里找（删除提交 `7ff5d4c`）。
 
-两者只在一个地方碰头：FOE IB2 的 `PSE_PORT` 决定「PPE 往哪送」，**只影响下行**。
-上行是 WiFi → TDMA → PPE 的**入口**方向，不走这个字段。所以把出口改成 P3
-不会动到上行——这两条可以同时开，原厂就是同时开着的。
-
-> ⚠ **这里修正过两次结论，都以实测为准，别照着旧笔记做。**
-> ① 早先判断「MT7916 该走 NPU，WED 不用开」，理由是 ponwrt 里没有
-> `kmod-airoha-wed` 这个包 —— **错的**，包不存在只说明要移植，不说明不需要。
-> ② 后来又把 WED 和 NPU 当成「两条互斥的下行路线」做成了二选一开关 —— **也错的**，
-> 它们各管一个方向。
-
-原厂 H3C HM2004-DU 是**双无线芯片**设计，lspci 里有两条独立的 PCIe 链：
-
-```
-=====LSPCI=====
-00:00.0 Class 0604: 14c3:6899
-01:00.0 Class 0280: 14c3:790a   ← npu_offload_mapping chipid=790a
-00:00.0 Class 0604: 14c3:6899
-01:00.0 Class 0280: 14c3:7906   ← whnat_cap_support() 支持列表里是 7906
-```
-
-`/proc/npu_offload_5G` 对应的是 790a 那块。**本机是单块 MT7916D = 7906。**
-原厂 `mt_whnat` 加载着、IRQ 100 八秒 +773 次、
-`WED_TX_BM_TO_WDMA_RX_DRV_TKID_MIB = 0x7fe` 非 0 —— WED 在真搬包。
-
-| 输入 | 默认 | 下行 | 上行 |
-|---|---|---|---|
-| `wifi_offload=both` | **★** | WED（P3） | NPU（TDMA tx） |
-| `wifi_offload=npu` | | NPU（P7） | NPU（TDMA tx） |
-| `wifi_offload=wed` | | WED（P3） | NPU，但摘掉 mt76 的 `CONFIG_MT7915_NPU` |
-
-- `both` = 原厂组合，默认。
-- `npu` = 下行也交回 NPU，即别人已跑通的那版（`ib2 = 0x0003e0e1`，PSE_PORT=7），
-  作为已知好基线 / 回退路径。
-- `wed` = 只装下行并关掉 mt76 侧的 NPU 开关，用来**隔离验证下行到底有没有通**，
-  排除上行 NPU 的干扰。
-
-> ⚠ **963 必须和 WED 驱动同进同退。** 只改 force port 而 WED 没起来，包会灌进 P3
-> 没人取 → PSE 共享缓冲耗尽 → 全芯片转发停摆（`WED_DOWNLINK_PLAN.md` 记过一次
-> 11975 包积压、WiFi 每 36 秒断连）。这也正是它俩绑在同一个开关里的原因。
-
-### `both` / `wed` 会搬这些（只管下行）
-
-| 组件 | 位置 | 作用 |
-|---|---|---|
-| `packages/airoha-wed/` | 本仓库 | 2500 行 SoC 侧 WED/WDMA 驱动（`kmod-airoha-wed` / `kmod-airoha-wdma`）。接管 `mtk_soc_wed_ops` —— AN7581 上 `mtk_eth_soc` 从不 probe，没有它 mt76 的 WED 路径永远是关的 |
-| `960-an7581-add-wed-wdma-nodes` | `patches/kernel-wed/` | 建 `wed@1fa02000` / `wdma@1fa06000` 节点，已带 `airoha,wed-ops` + `airoha,attach-enable` |
-| `961-an7581-enable-mediatek-wed-kconfig` | 同上 | 开 `NET_VENDOR_MEDIATEK` + `NET_MEDIATEK_SOC`。**不开的话** `mtk_wed.h` 里所有 helper 编译成空桩，mt7915 根本不会调 `mtk_wed_device_attach()` |
-| `962-mediatek-wed-allow-airoha` | 同上 | `NET_MEDIATEK_SOC_WED` 原本只 `depends on ARCH_MEDIATEK`，加上 `ARCH_AIROHA` |
-| `963-airoha-ppe-wifi-download-to-fp-wdma` | 同上 | PPE 出口从 P7(CDM4) 改 **P3(GDM3)** + IB2 补 `PSE_QOS` |
-| `964-an7581-hg5585f-enable-wed` | 同上 | HG5585F（CT+CU 共用的 common.dtsi）把 WED/WDMA 置 `status = "okay"` |
-
-### 两处按原厂实机修正的值
-
-我们的实现和原厂 dump 逐项一致（`WDMA_GLO_CFG 50710064`、`CFG_BASE 1fa00000`、
-`OFST0/1`、`PCIE_CFG_BASE 1fc20000`、`TX_BM_DYN_TH 7f0001`），只有两处原先不一致，
-现在**默认改成原厂值**，并做成可切参数（刷一次机就能 A/B，不用重编）：
-
-| 寄存器 | 原厂实机 | 我们原来的值 | 现在默认 |
-|---|---|---|---|
-| `WED_PCIE_INT_CTRL` | `0x101000`（POLL=1） | `0x102000`（POLL=2，取自 `woe_hw.h` 宏） | **原厂 1** |
-| `WED_WDMA_RX_THRES_CFG` | `0x00040020`（复位值） | `0x03FD1FFF`（取自 `woe_hw.c:1149`） | **原厂复位值** |
-
-切回厂商源码值：模块参数 `pcie_poll_mode=2` / `rx_thres_mode=1`，或设备树属性
-`airoha,pcie-poll-mode` / `airoha,rx-thres-mode`。
-
-> ⚠ 模块参数在这颗 SoC 上**通过 `/etc/modules.d` 传不进去**：wed 节点 `status=okay`，
-> 内核在 preinit 之前（实测 t=3.38s）就 `request_module()` 把模块装好了，procd 后面
-> 读 modules.d 传的参数会被静默丢弃。所以只能 `insmod 绝对路径.ko 参数=值`，或写设备树。
-
-## NPU 固件选择（stock / h3c / clanker / none）
+## NPU 固件选择（r65 / stock / h3c / clanker / none）
 
 NPU 是 Airoha SoC 里那颗 RISC-V 核，**不是** Linux 驱动 —— host 端驱动 `airoha_npu`
 随内核编出，它按固定名字找两个固件镜像：
@@ -318,10 +269,17 @@ NPU 是 Airoha SoC 里那颗 RISC-V 核，**不是** Linux 驱动 —— host �
 
 | 选项 | 行为 |
 |---|---|
-| `stock`（默认） | 用 ponwrt 自带包 `airoha-en7581-npu-firmware`（linux-firmware 里的镜像，MT7992 / **eagle** 数据面） |
+| `r65`（**默认**）★ | 用 ponwrt 自带的 `airoha-clanker-npu` 包，即 ClankerNPU `735529c` + 46 个补丁，`SOC=AN7581 WIFI=MT7916 NPUTX=1` 现编。**这是与当前内核/mt76 栈配套的那一版** |
+| `stock` | 用 `airoha-en7581-npu-firmware`（linux-firmware 里的镜像，MT7992 / **eagle** 数据面）。⚠ 与已合并的 r65 驱动栈**不是同一套 ABI**，别在 npu 分支上用 |
 | `h3c` | 用 H3C HM2004-DU 原厂镜像（仓库自带，配 MT7916 出厂的那份），见下节 |
-| `clanker` | 用 [ClankerNPU](https://github.com/ClankerConstruction/ClankerNPU) 现编，变体由 `npu_wifi` 决定 |
+| `clanker` | 用 [ClankerNPU](https://github.com/ClankerConstruction/ClankerNPU) 现编，变体由 `npu_wifi` 决定（自己指定的源码 ref，做实验用） |
 | `none` | 不装任何固件（NPU 不起，只剩有线软件转发） |
+
+> ⚠ **为什么默认从 `stock` 改成了 `r65`**：内核补丁 931–983 + mt76 120–179 和它
+> 的固件是**同一个 ABI**。r65 驱动会以 `airoha,clanker-kite-abi` 去问固件要
+> `GET_WAIT/SET_WAIT`，而 stock 那份是 Eagle/原厂 ABI，不支持这些命令
+> （`airoha,skip-npu-version-query` 就是为此存在的：Clanker 的 GET_WAIT 是 0..9，
+> Linux 的版本查询是 GET_WAIT 10）。配错不会出现编译错误，只会静默不卸载。
 
 ### H3C 原厂镜像（`npu_fw=h3c`）
 

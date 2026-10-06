@@ -344,6 +344,17 @@ jobs:
     #     时 "Use workflow from" 选错、或 branch 手填回 master）—— 而这类
     #     问题到刷机后才发现，一次要浪费一整轮构建。这里提前拦住。
     #
+    #     ⚠ 校验项在 2026-10-06 换过一茬：npu 分支已整体合并上游
+    #     ntp2000/ponwrt 的 port/r65-npu-wifi（merge 提交 93943d57e1），
+    #     卸载栈从「我们自己的 mt76 113 + 内核 950」换成 r65 的
+    #     Clanker/Kite 全套：
+    #       mt76    120-179（120 = kite npu 实现）
+    #       内核    931-983（933 内存 profile / 944 PPE+flowtable 下行数据面）
+    #       固件    package/firmware/airoha-clanker-npu（源码现编，riscv 工具链）
+    #       设备树  an7581-npu-mt7916.dtsi（0x92000000，kite ABI）
+    #     旧的 113 和 950 已经在合并时删掉了，这里如果还校验它们，
+    #     每次构建都会假失败。
+    #
     #     缺任何一项都直接失败，并打印补法。
     # =========================================================
     - name: Verify NPU patches (MT7916 offload)
@@ -372,14 +383,53 @@ jobs:
         }
 
         echo "== 源码 ${REPO_URL} @ ${REPO_BRANCH} (${SRC_SHA}) =="
-        chk "mt76: MT7915/MT7916 的 NPU 卸载实现" \
-            package/kernel/mt76/patches/113-mt7915-add-airoha-npu-offload-support.patch
+
+        # --- mt76 侧：Kite NPU 实现 + 编译开关 + 模块参数 ---
+        chk "mt76: MT7915/MT7916 Kite NPU 卸载实现（r65 系列 120-179）" \
+            package/kernel/mt76/patches/120-mt76-add-airoha-mt7915-kite-npu.patch
         chk "mt76: an7581 打开 CONFIG_MT7915_NPU" \
             package/kernel/mt76/Makefile "CONFIG_MT7915_NPU"
-        chk "kernel: TX 保留区未预留时跳过对应命令" \
-            target/linux/airoha/patches-6.18/950-net-airoha-npu-skip-tx-regions-not-reserved-in-dt.patch
+        # wed_enable=Y 是从 filogic 段照抄的空转参数（airoha 没开 WED 编译），
+        # 真正让 Kite 起来的是这三个。
+        chk "mt76: mt7915e 模块参数打开 NPU（npu_control/npu_enable/npu_tx）" \
+            package/kernel/mt76/Makefile "npu_control=Y"
+        # 系列里的补丁要成套，少一个就编不过或行为诡异，直接数一下
+        KITE_N="$(ls package/kernel/mt76/patches/ | grep -cE '^1[2-7][0-9]-')"
+        if [ "$KITE_N" -ge 55 ]; then
+          echo "  ✔ mt76: Kite 系列补丁数量 ${KITE_N}（120-179 齐全）"
+        else
+          echo "::error::mt76 的 Kite 系列补丁只有 ${KITE_N} 个（应 ≥55，即 120-179）"
+          MISSING=1
+        fi
+
+        # --- 内核侧：Kite 内存 profile + PPE 下行数据面 ---
+        chk "kernel: Kite 内存 profile（TX 区未预留则跳过，取代旧的 950）" \
+            target/linux/airoha/patches-6.18/933-net-airoha-npu-kite-memory-profile.patch
+        chk "kernel: Kite PPE + flowtable 下行数据面（r65 的核心补丁）" \
+            target/linux/airoha/patches-6.18/944-airoha-kite-ppe-flowtable-datapath.patch
+
+        # --- 设备树：保留内存 + kite ABI ---
         chk "dts: MT7916 的 NPU 保留内存区" \
             target/linux/airoha/dts/an7581-npu-mt7916.dtsi
+        chk "dts: 标记为 Clanker Kite ABI（驱动按它对固件发命令）" \
+            target/linux/airoha/dts/an7581-npu-mt7916.dtsi "airoha,clanker-kite-abi"
+
+        # --- 固件与工具链：r65 的固件是源码现编的，缺工具链就编不出来 ---
+        chk "firmware: ClankerNPU 源码现编包" \
+            package/firmware/airoha-clanker-npu/Makefile
+        chk "host: RISC-V 工具链（编 NPU 固件用）" \
+            package/devel/airoha-riscv-toolchain/Makefile
+
+        # --- 反向校验：旧栈的补丁必须已经不在了，否则说明拉到了合并前的树 ---
+        for old in \
+          package/kernel/mt76/patches/113-mt7915-add-airoha-npu-offload-support.patch \
+          target/linux/airoha/patches-6.18/950-net-airoha-npu-skip-tx-regions-not-reserved-in-dt.patch
+        do
+          if [ -e "$old" ]; then
+            echo "::error::$old 还在 —— 那是合并 r65 之前的旧栈，与 r65 的补丁冲突（都新建 mt7915/npu.c）。源码树拉错了。"
+            MISSING=1
+          fi
+        done
 
         # HG5585F 必须真的 include 了那份 dtsi，否则保留内存没有生效
         case "$PROFILE" in
@@ -390,14 +440,14 @@ jobs:
         esac
 
         if [ "$MISSING" != "0" ]; then
-          echo "::error::源码树缺少 MT7916 NPU 卸载补丁。"
+          echo "::error::源码树缺少 MT7916 NPU 卸载补丁（r65 Clanker/Kite 栈）。"
           echo "  最常见原因：跑 workflow 时 'Use workflow from' 没选本分支，"
           echo "  或 branch 手填成了 master。当前 branch=${REPO_BRANCH}"
-          echo "  补丁在 qwe3017/ponwrt 的 npu 分支里（commit 69bbd78d58），"
+          echo "  补丁在 qwe3017/ponwrt 的 npu 分支里（合并提交 93943d57e1 及其后），"
           echo "  把 branch 改回 npu 再跑即可。"
           exit 1
         fi
-        echo "✅ MT7916 NPU 卸载补丁齐全"
+        echo "✅ MT7916 NPU 卸载补丁齐全（r65 Clanker/Kite）"
         echo "NPU_PATCHES_OK=1" >> "$GITHUB_ENV"
 
     # =========================================================
