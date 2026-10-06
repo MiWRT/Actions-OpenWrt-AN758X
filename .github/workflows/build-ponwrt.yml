@@ -36,19 +36,11 @@ env:
   #   CONFIG_PACKAGE_airoha-en7581-mt7916-npu-firmware=y
   NPU_DEFAULT_WIFI: ${{ github.event.inputs.npu_default_wifi || 'MT7916' }}
   NPU_FILES_FALLBACK: ${{ github.event.inputs.npu_fw_files_fallback || 'false' }}
-  # ---- Wi-Fi 卸载（方向以「连 WiFi 的终端」为准）----
-  #   下行 = 终端接收：PPE → PSE port 3 (GDM3/WDMA) → WED  → MT7916D
-  #   上行 = 终端发出：WiFi rx ring → NPU BA 重排 → TDMA tx → PPE
-  #                    （NPU 固件自带，不依赖 Linux flowtable）
-  #
-  #   两者不是互斥的两条路，而是各管一个方向，原厂两个都用。
-  #   只在 FOE IB2 的 PSE_PORT 上碰头，而那个字段只影响下行出口，
-  #   所以把出口改成 P3 不会动到上行。
-  #
-  #   both = 下行 WED + 上行 NPU   ★ 原厂组合（默认）
-  #   npu  = 下行也交回 NPU（P7）—— 别人已跑通的那版，作为已知好基线
-  #   wed  = 只装下行，并摘掉 mt76 的 CONFIG_MT7915_NPU，用于隔离验证下行
-  WIFI_OFFLOAD: ${{ github.event.inputs.wifi_offload || 'both' }}
+  # ---- Wi-Fi 卸载 ----
+  #   旧模型（下行 WED + 上行 NPU）已作废：WED 真 attach 会把设备打重启，
+  #   而上游 r65 卸载栈（已合并进 ponwrt npu 分支）根本没有 WED。
+  #   ⇒ 只剩 npu：下行与上行都走 NPU (Clanker/Kite)。
+  WIFI_OFFLOAD: ${{ github.event.inputs.wifi_offload || 'npu' }}
   # 固件版本后缀（显示在 LuCI 概览页「固件版本」后面）
   FW_AUTHOR: ${{ github.event.inputs.fw_author || 'qwe3017' }}
   FW_BUILD_TIME: ''                 # 留空 = 自动取构建时时间（Asia/Shanghai）
@@ -114,14 +106,12 @@ on:
           - 'false'
           - 'true'
       wifi_offload:
-        description: 'Wi-Fi 卸载：下行/上行。both=原厂组合(WED/NPU)；npu=两边都走NPU(已跑通的基线)；wed=只装下行'
+        description: 'Wi-Fi 卸载路线（WED 已摘除，只保留 npu：下行+上行都走 NPU/Clanker）'
         required: true
-        default: 'both'
+        default: 'npu'
         type: choice
         options:
-          - both
           - npu
-          - wed
       npu_fw:
         description: 'NPU 固件来源 (stock=linux-firmware 官方；h3c=H3C 原厂镜像；clanker=ClankerNPU 现编)'
         required: true
@@ -808,23 +798,12 @@ jobs:
         grep -nE 'npu-firmware' .config || echo "(无)"
 
     # =========================================================
-    # 7.6 Wi-Fi 卸载 —— 勾选/取消 SoC 侧 WED 模块（只管下行）
+    # 7.6 Wi-Fi 卸载 —— 确保 SoC 侧 WED 模块是关的
     #
-    #     方向以「连 WiFi 的终端」为准：
-    #       下行 = 终端接收，由这里的 WED/WMDA 负责
-    #       上行 = 终端发出，走 NPU 固件自带的 TDMA tx，不依赖 Linux
-    #              flowtable，跟这两个包无关
-    #     所以 both/wed 装 WED，npu 不装 —— 不是「换一条路」，而是
-    #     「下行要不要交给 WED」。
-    #
-    #     diy-part1.sh 已经按 WIFI_OFFLOAD 决定要不要把 airoha-wed 包和
-    #     五个内核补丁放进源码树。这里只负责 .config 里的符号，因为
-    #     .config 是在 diy-part1 之后才生成的。
-    #
-    #     both/wed: kmod-airoha-wed + kmod-airoha-wdma =y
-    #          （airoha-wed 默认 attach_enable=0 空跑，需在 DTS 里给
-    #           airoha,attach-enable 才会真正卸载 —— 见下）
-    #     npu: 两个包都置 n
+    #     WED 路线已摘除（实机：mt76 真 attach 会把设备打重启；r65 也不用它）。
+    #     这里只负责 .config 里的符号 —— .config 是在 diy-part1 之后才生成的。
+    #     airoha-wed 包本身也不再拷进源码树，所以两个包只能置 n，
+    #     否则 defconfig 会因为包不存在而静默剔除。
     # =========================================================
     - name: Select Wi-Fi offload route
       run: |
@@ -844,57 +823,17 @@ jobs:
             .config
         done
 
-        if [ "${WIFI_OFFLOAD}" = "wed" ] || [ "${WIFI_OFFLOAD}" = "both" ]; then
-          echo "CONFIG_PACKAGE_kmod-airoha-wed=y" >> .config
-          echo "CONFIG_PACKAGE_kmod-airoha-wdma=y" >> .config
-          echo "✅ 下行 = WED (PPE → P3/GDM3 → WDMA → WED → MT7916D)"
-          echo "   上行 = NPU (WiFi rx ring → NPU BA 重排 → TDMA tx → PPE，固件自带)"
-          echo "WIFI_ROUTE_SYMBOL=kmod-airoha-wed" >> "$GITHUB_ENV"
-        else
-          for sym in kmod-airoha-wed kmod-airoha-wdma; do
-            echo "# CONFIG_PACKAGE_${sym} is not set" >> .config
-            echo "# CONFIG_DEFAULT_${sym} is not set" >> .config
-            echo "# CONFIG_MODULE_DEFAULT_${sym} is not set" >> .config
-          done
-          echo "Wi-Fi 卸载 = npu：下行也交回 NPU (PPE → P7/CDM4 → TDMA → NPU)"
-          echo "WIFI_ROUTE_SYMBOL=kmod-airoha-npu" >> "$GITHUB_ENV"
-        fi
+        # WED 路线已摘除：两个包一律置 n（包本身也不再拷进源码树）
+        for sym in kmod-airoha-wed kmod-airoha-wdma; do
+          echo "# CONFIG_PACKAGE_${sym} is not set" >> .config
+          echo "# CONFIG_DEFAULT_${sym} is not set" >> .config
+          echo "# CONFIG_MODULE_DEFAULT_${sym} is not set" >> .config
+        done
+        echo "Wi-Fi 卸载 = npu：下行与上行都交给 NPU (r65 Clanker/Kite，PPE → TDMA → NPU → WiFi)"
+        echo "WIFI_ROUTE_SYMBOL=kmod-airoha-npu" >> "$GITHUB_ENV"
 
         echo "--- 修改后 .config 中的 WED 行 ---"
         grep -nE 'kmod-airoha-(wed|wdma)' .config || echo "(无)"
-
-    # =========================================================
-    # 7.7 wed 路线：确认 WED 设备树真的生效了
-    #
-    #     不需要在这里写属性 —— 960 补丁建节点时就带了
-    #     airoha,wed-ops / airoha,attach-enable，964 只负责 status="okay"。
-    #     这里只做校验：补丁漏了的话，airoha-wed 会停在空跑（配完寄存器
-    #     再回滚），dmesg 里一切正常但一个包都不会卸载，是最难查的失败态。
-    # =========================================================
-    - name: Verify WED device tree
-      if: env.WIFI_OFFLOAD == 'wed' || env.WIFI_OFFLOAD == 'both'
-      run: |
-        cd "$BUILD_ROOT/openwrt"
-        MISS=0
-        chk() {
-          if grep -q "$2" "$1"; then echo "  ✔ $3"; else
-            echo "::error::$1 里找不到「$2」 —— $3"; MISS=1; fi
-        }
-        echo "== WED 设备树校验 =="
-        [ -f target/linux/airoha/dts/an7581-wed.dtsi ] \
-          && echo "  ✔ an7581-wed.dtsi 存在" \
-          || { echo "::error::缺 an7581-wed.dtsi（960 补丁没打上？）"; MISS=1; }
-        chk target/linux/airoha/dts/an7581-wed.dtsi 'airoha,attach-enable' \
-            '节点已带 attach-enable（否则 attach() 永远空跑）'
-        chk target/linux/airoha/dts/an7581.dtsi 'an7581-wed.dtsi' \
-            'an7581.dtsi 已 include 节点定义'
-        chk target/linux/airoha/dts/an7581-fiberhome-hg5585f-common.dtsi 'status = "okay"' \
-            'HG5585F 已把 WED 置 okay'
-        grep -q '^&wed' target/linux/airoha/dts/an7581-fiberhome-hg5585f-common.dtsi \
-          && echo "  ✔ HG5585F 有 &wed 覆盖" \
-          || { echo "::error::HG5585F 没有 &wed 节点覆盖（964 补丁没打上？）"; MISS=1; }
-        [ "$MISS" != "0" ] && exit 1
-        echo "✅ WED 设备树齐全"
 
     # =========================================================
     # 8. diy-part2.sh —— 时区改为中国
@@ -1396,7 +1335,7 @@ jobs:
           echo "| NPU 固件 | \`${NPU_FW}\`$( [ "$NPU_FW" = "clanker" ] && echo " (${NPU_WIFI}, ClankerNPU)" )$( [ "$NPU_FW" = "h3c" ] && echo " (${NPU_WIFI}, H3C 原厂镜像)" ) |"
           [ -n "${NPU_FW_SYMBOL:-}" ] && echo "| NPU 固件包 | \`${NPU_FW_SYMBOL}\` (CONFIG_PACKAGE_...=y) |"
           echo "| MT7916 NPU 补丁 | $( [ "${NPU_PATCHES_OK:-}" = "1" ] && echo '✅ 已校验齐全' || echo '⚠ 未校验' ) |"
-          echo "| Wi-Fi 卸载 | \`${WIFI_OFFLOAD}\` —— 下行 $( [ "${WIFI_OFFLOAD}" = "npu" ] && echo 'NPU(P7)' || echo 'WED(P3)' ) / 上行 NPU(TDMA tx，固件自带) |"
+          echo "| Wi-Fi 卸载 | \`${WIFI_OFFLOAD}\` —— 下行 NPU (r65 Clanker/Kite) / 上行 NPU(TDMA tx，固件自带)；WED 已摘除 |"
           echo ""
 
           # NPU 固件用 ClankerNPU 现编时，把版本/变体/校验写进 Release 便于回溯
