@@ -216,17 +216,61 @@ MT7916 的 NPU 卸载补丁**直接推进了 `qwe3017/ponwrt` 的 `npu` 分支**
 > checkout 的是哪个分支。选错分支会拉到没有 workflow 改动（branch 默认还是 master）
 > 的那一份，等于白跑一轮。
 
-### WED / WDMA 要开吗？**不开。**
+## Wi-Fi 卸载路线：`wed` / `npu`
 
-`CONFIG_PACKAGE_kmod-airoha-wed` / `kmod-airoha-wdma` 与 NPU 是**两条互斥的下行路线**：
+> ⚠ **这里修正过一次结论。** 早先的判断是「MT7916 该走 NPU，WED 不用开」，理由是
+> ponwrt 里没有 `kmod-airoha-wed` 这个包。**那是错的** —— 包不存在只能说明要移植，
+> 不能说明不需要。真正的依据在下面这张 lspci 里。
 
-- WED/WDMA：PPE → **PSE port 3 (GDM3)** → WED RX_DRV → MT7916
-- NPU：PPE → **PSE port 7 (CDM4/TDMA)** → NPU → MT7916
+原厂 H3C HM2004-DU 是**双无线芯片**设计：
 
-两边抢同一个出口，而且 WED 那条在本机从未搬通过一个包（`RX0_PROCESSED_MIB` 恒 0、
-P3 堆包）。更实际的是：**ponwrt 源码里根本没有这两个包**（本仓库 6666 分支那套
-`airoha-wed` / `airoha-wdma` 模块没有合进 ponwrt），写进 `.config` 也只是被
-`defconfig` 静默丢弃的无效符号。走 NPU 路线就别碰它们。
+```
+=====LSPCI=====
+00:00.0 Class 0604: 14c3:6899
+01:00.0 Class 0280: 14c3:790a   ← 走 NPU：npu_offload_mapping chipid=790a
+00:00.0 Class 0604: 14c3:6899
+01:00.0 Class 0280: 14c3:7906   ← 走 WED：whnat_cap_support() 支持列表里是 7906
+```
+
+而 `/proc/npu_offload_5G` 对应的是 790a 那块。**本机是单块 MT7916D = 7906，原厂给
+它走的就是 WED**，不是 NPU。原厂 `mt_whnat` 加载着、IRQ 100 八秒 +773 次、
+`WED_TX_BM_TO_WDMA_RX_DRV_TKID_MIB = 0x7fe` 非 0 —— WED 在真搬包。
+
+| 输入 | 默认 | 说明 |
+|---|---|---|
+| `wifi_offload` | **`wed`** | `wed` = PPE → P3(GDM3/WDMA) → WED → MT7916D（原厂路线）；`npu` = PPE → P7(CDM4/TDMA) → NPU |
+
+两条路线**共用 FOE IB2 的 `PSE_PORT` 字段，所以出口二选一**；但模块可以共存——
+原厂就是 `mt_whnat` 和 `npu` 都加载着的。
+
+### `wed` 路线会搬这四样东西
+
+| 组件 | 位置 | 作用 |
+|---|---|---|
+| `packages/airoha-wed/` | 本仓库 | 2500 行 SoC 侧 WED/WDMA 驱动（`kmod-airoha-wed` / `kmod-airoha-wdma`）。接管 `mtk_soc_wed_ops` —— AN7581 上 `mtk_eth_soc` 从不 probe，没有它 mt76 的 WED 路径永远是关的 |
+| `960-an7581-add-wed-wdma-nodes` | `patches/kernel-wed/` | 建 `wed@1fa02000` / `wdma@1fa06000` 节点，已带 `airoha,wed-ops` + `airoha,attach-enable` |
+| `961-an7581-enable-mediatek-wed-kconfig` | 同上 | 开 `NET_VENDOR_MEDIATEK` + `NET_MEDIATEK_SOC`。**不开的话** `mtk_wed.h` 里所有 helper 编译成空桩，mt7915 根本不会调 `mtk_wed_device_attach()` |
+| `962-mediatek-wed-allow-airoha` | 同上 | `NET_MEDIATEK_SOC_WED` 原本只 `depends on ARCH_MEDIATEK`，加上 `ARCH_AIROHA` |
+| `963-airoha-ppe-wifi-download-to-fp-wdma` | 同上 | PPE 出口从 P7(CDM4) 改 **P3(GDM3)** + IB2 补 `PSE_QOS` |
+| `964-an7581-hg5585f-enable-wed` | 同上 | HG5585F（CT+CU 共用的 common.dtsi）把 WED/WDMA 置 `status = "okay"` |
+
+### 两处按原厂实机修正的值
+
+我们的实现和原厂 dump 逐项一致（`WDMA_GLO_CFG 50710064`、`CFG_BASE 1fa00000`、
+`OFST0/1`、`PCIE_CFG_BASE 1fc20000`、`TX_BM_DYN_TH 7f0001`），只有两处原先不一致，
+现在**默认改成原厂值**，并做成可切参数（刷一次机就能 A/B，不用重编）：
+
+| 寄存器 | 原厂实机 | 我们原来的值 | 现在默认 |
+|---|---|---|---|
+| `WED_PCIE_INT_CTRL` | `0x101000`（POLL=1） | `0x102000`（POLL=2，取自 `woe_hw.h` 宏） | **原厂 1** |
+| `WED_WDMA_RX_THRES_CFG` | `0x00040020`（复位值） | `0x03FD1FFF`（取自 `woe_hw.c:1149`） | **原厂复位值** |
+
+切回厂商源码值：模块参数 `pcie_poll_mode=2` / `rx_thres_mode=1`，或设备树属性
+`airoha,pcie-poll-mode` / `airoha,rx-thres-mode`。
+
+> ⚠ 模块参数在这颗 SoC 上**通过 `/etc/modules.d` 传不进去**：wed 节点 `status=okay`，
+> 内核在 preinit 之前（实测 t=3.38s）就 `request_module()` 把模块装好了，procd 后面
+> 读 modules.d 传的参数会被静默丢弃。所以只能 `insmod 绝对路径.ko 参数=值`，或写设备树。
 
 ## NPU 固件选择（stock / h3c / clanker / none）
 

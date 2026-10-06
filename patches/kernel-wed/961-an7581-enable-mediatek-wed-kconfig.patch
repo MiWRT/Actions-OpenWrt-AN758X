@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: ponwrt bring-up <noreply@example.com>
+Date: Fri, 2 Oct 2026 12:00:00 +0800
+Subject: [PATCH] airoha: an7581: enable NET_VENDOR_MEDIATEK / NET_MEDIATEK_SOC
+
+Prerequisite for the Wi-Fi downlink offload path (WED).
+
+NET_MEDIATEK_SOC_WED is def_bool NET_MEDIATEK_SOC != n, so enabling
+NET_MEDIATEK_SOC is what turns the WED helpers in
+include/linux/soc/mediatek/mtk_wed.h from stubs into real calls.  Without
+it mt7915 never calls mtk_wed_device_attach(), and the SoC-side
+mtk_soc_wed_ops table stays unused no matter what an out-of-tree module
+registers.
+
+NET_MEDIATEK_SOC is built in (=y) rather than as a module, because
+mtk_wed.o is not a standalone object: mediatek/Makefile folds it into the
+composite mtk_eth module (mtk_eth-$(CONFIG_NET_MEDIATEK_SOC_WED) +=
+mtk_wed.o).  As =m the symbol mtk_soc_wed_ops would live in mtk_eth.ko,
+which no OpenWrt package ships on this target, and mt7915e would then
+fail to load with an unresolvable symbol.  Built in, mtk_soc_wed_ops is
+always present in vmlinux.
+
+The mtk_eth_soc driver itself cannot probe here -- there is no
+mediatek,eth node in any AN7581 device tree, and its v1 WED path
+additionally wants the mediatek,pcie-mirror and mediatek,hifsys syscons
+that Airoha does not have.  It costs image space only, never binds, and
+leaves mtk_soc_wed_ops NULL for the Airoha WED module to claim via
+rcu_assign_pointer().
+
+This is a bring-up step.  It changes no runtime behaviour by itself:
+mt7915 only takes the WED path once a soc-side ops table exists, and
+flow_offloading_hw stays 0.
+---
+ target/linux/airoha/an7581/config-6.18 | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/target/linux/airoha/an7581/config-6.18 b/target/linux/airoha/an7581/config-6.18
+--- a/target/linux/airoha/an7581/config-6.18
++++ b/target/linux/airoha/an7581/config-6.18
+@@ -247,8 +247,9 @@ CONFIG_NET_FLOW_LIMIT=y
+ CONFIG_NET_INGRESS=y
+ CONFIG_NET_SELFTESTS=y
+ # CONFIG_NET_VENDOR_3COM is not set
+ CONFIG_NET_VENDOR_AIROHA=y
+-# CONFIG_NET_VENDOR_MEDIATEK is not set
++CONFIG_NET_VENDOR_MEDIATEK=y
++CONFIG_NET_MEDIATEK_SOC=y
+ CONFIG_NET_XGRESS=y
+ CONFIG_NLS=y
+ CONFIG_NO_HZ_COMMON=y
+

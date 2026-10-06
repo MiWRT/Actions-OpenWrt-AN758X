@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: AN7581 WED downlink work <noreply@localhost>
+Date: Thu, 02 Oct 2026 00:00:00 +0800
+Subject: [PATCH] airoha: dts: an7581: describe the MT7622-derived WED/WDMA blocks
+
+Airoha AN7581 carries two instances of the MediaTek MT7622 Wi-Fi
+Offload Engine plus a companion WDMA block. They are the SoC-side peer
+of the "mt_whnat" WOE/WED driver and enable the Wi-Fi TX (downlink)
+hardware offload path that mainline mt76 already knows how to drive
+through mtk_wed_device_attach() for mt7915.
+
+Both nodes are added disabled; boards opt in explicitly. Only the
+FiberHome HG5585F CT enables them today, it carries the MT7916D whose
+two PCIe HIFs line up with the two WED instances.
+
+Nothing in the current tree claims these compatibles, so adding the
+nodes alone changes no behaviour. The nodes become live only once a
+driver binds, which is what the companion package airoha-wed is for.
+
+The nodes also carry airoha,wed-ops / airoha,attach-enable here, i.e.
+they are armed as soon as a board sets status = "okay" -- which is what
+the stock H3C device does (mt_whnat is loaded and its IRQ is firing).
+Boards opt in explicitly (see the companion enable patch); this one only
+describes the hardware.
+
+---
+diff --git a/target/linux/airoha/dts/an7581-wed.dtsi b/target/linux/airoha/dts/an7581-wed.dtsi
+new file mode 100644
+--- /dev/null
++++ b/target/linux/airoha/dts/an7581-wed.dtsi
+@@ -0,0 +1,123 @@
++// SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++
++#include <dt-bindings/interrupt-controller/irq.h>
++#include <dt-bindings/interrupt-controller/arm-gic.h>
++
++/*
++ * Airoha AN7581 (= EN7581) integrates two instances of the MediaTek MT7622
++ * WED (Wi-Fi Offload Engine) IP, plus a companion WDMA block.
++ *
++ * This is the SoC-side peer of the "mt_whnat" WOE/WED driver. Together with
++ * mainline mt76's existing mt7915 WED hooks it enables the
++ * Wi-Fi TX (downlink) hardware offload path:
++ *
++ *   PPE/FOE --force_port=FP_WDMA(3)--> WDMA --> WED --> PCIe --> MT7916
++ *
++ * Default status is "disabled"; each board opts in explicitly. Enabling on a
++ * board whose MT7916 firmware does not cooperate would only waste power --
++ * nothing else in the SoC binds to these compatibles.
++ *
++ * ---------------------------------------------------------------------------
++ * Provenance
++ * ---------------------------------------------------------------------------
++ * Addresses / IRQs: merbanan/airoha_ml "en7581-base.dtsi".
++ *   Cross-checked: its pcie0 is 0x1fc00000 + GIC_SPI 39, byte-for-byte
++ *   identical to OpenWrt an7581.dtsi pcie0. Independent sources agree, and
++ *   the IRQ range 67-74 lands in a hole unused by an7581.dtsi
++ *   (which consumes 18-64 and 103-170).
++ *
++ * Register layout: matches MediaTek's wed_def.h from the airoha_wed_wdma
++ *   (mt_whnat) tree exactly:
++ *     WED_REV 0x000 | WED_MOD_RST 0x008 | WED_CTRL 0x00c
++ *     WED_AXI_CTRL 0x010 | WED_CTRL2 0x01c | WED_EX_INT_STA 0x020
++ *
++ * Hardware confirmed on-device 2026-10-02 via devmem:
++ *   0x1fa02000 -> 0x76220001   WED_REV = MT7622 rev 1
++ *   0x1fa03000 -> 0x76220001   second instance, same IP
++ *   0x1fa0200c -> 0x01000000   WED_CTRL
++ *   0x1fa0201c -> 0x00000020   WED_CTRL2
++ *   0x1fa06200 -> 0x3c000204   WDMA responds too
++ * Reads are clean (no bus abort), so the block is mapped and clocked.
++ *
++ * WDMA instance size 0x400 is not arbitrary: mt_whnat's wdma.h encodes each
++ * instance as two 0x200 halves (WDMA0_OFST0/1 = 0x6204_6220 / 0x6100_6000
++ * relative to CFG_BASE 0x1fa00000), i.e. 0x1fa06000 + 0x1fa06200. One 0x400
++ * window covers exactly that pair.
++ * ---------------------------------------------------------------------------
++ */
++
++/ {
++	soc {
++		wed: wed@1fa02000 {
++			compatible = "en751221,wed";
++			reg = <0x0 0x1fa02000 0x0 0xb00>,
++			      <0x0 0x1fa03000 0x0 0xb00>;
++			interrupts = <GIC_SPI 67 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 68 IRQ_TYPE_LEVEL_HIGH>;
++			/* number of WED instances, read via of_property_read_u32_index */
++			wed_num = <2>;
++			/* WED instance -> PCIe slot carrying that MT7916 HIF */
++			pci_slot_map = <0 1>;
++
++			/*
++			 * Publish the mtk_soc_wed_ops table. Off by default:
++			 * without it mt76's forward path sees
++			 * mtk_wed_device_active() == false and Wi-Fi stays
++			 * software-only.
++			 *
++			 * This has to be a device-tree property rather than a
++			 * module parameter. The node is "okay", so the kernel
++			 * autoloads airoha-wed by modalias at t=3.38s on this
++			 * board -- before preinit (3.75s) and before procd reads
++			 * /etc/modules.d (10.4s). Module arguments supplied there
++			 * are silently dropped because the module is already
++			 * resident. Verified on-device: modules.d with explicit
++			 * arguments still gave wed_ops=N, while
++			 * "insmod .../airoha-wed.ko wed_ops=1" gave wed_ops=Y.
++			 *
++			 * airoha,attach-enable additionally lets attach() succeed.
++			 * Leaving it off programs the hardware exactly as a real
++			 * attach would, then rolls back and refuses, so the Wi-Fi
++			 * datapath is unchanged. It is what makes the bring-up
++			 * reversible without reflashing.
++			 *
++			 * Now set. On-device 2026-10-03, via
++			 * "echo 1 > .../airoha_wed/parameters/attach_enable"
++			 * plus an insmod with wed_enable=1:
++			 *   WED0 attached
++			 *   WED0 started (irq_mask=0xee0e000b)
++			 *   WED_CTRL 0x01000000 -> 0x01000507 (TX_BM + TX_FREE_AGT)
++			 * with both APs coming up and an associated client at
++			 * 780 Mbit/s VHT-MCS9. The PCIe map landed on bus 1 /
++			 * 0x1fc20000 as intended. One-shot WED_EX_INT_STA
++			 * 0x00380000 is reported and clears itself; it did not
++			 * stop the datapath.
++			 *
++			 * Note: this alone is not enough to offload. mt7915e has
++			 * a second gate, its own wed_enable module parameter,
++			 * which /etc/modules.d/mt7915e already sets to 1. Both
++			 * must be true. Note also that modprobe drops that
++			 * argument on this platform; only an explicit
++			 * "insmod .../mt7915e.ko wed_enable=1" works.
++			 */
++			airoha,wed-ops;
++			airoha,attach-enable;
++
++			status = "disabled";
++		};
++
++		wdma: wdma@1fa06000 {
++			compatible = "en751221,wdma";
++			reg = <0x0 0x1fa06000 0x0 0x400>,
++			      <0x0 0x1fa06400 0x0 0x400>;
++			/* 3 IRQs per instance (WDMA_IRQ_NUM == 3 in wdma.h) */
++			interrupts = <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 70 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 71 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 72 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 73 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 74 IRQ_TYPE_LEVEL_HIGH>;
++			status = "disabled";
++		};
++	};
++};
+diff --git a/target/linux/airoha/dts/an7581.dtsi b/target/linux/airoha/dts/an7581.dtsi
+--- a/target/linux/airoha/dts/an7581.dtsi
++++ b/target/linux/airoha/dts/an7581.dtsi
+@@ -8,5 +8,6 @@
+ #include <dt-bindings/reset/airoha,en7581-reset.h>
+ #include <dt-bindings/leds/common.h>
+ #include <dt-bindings/thermal/thermal.h>
++#include "an7581-wed.dtsi"
+ 
+ / {
+-- 
+2.45.2

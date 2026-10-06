@@ -302,4 +302,60 @@ else
   echo "未启用任何第三方插件"
 fi
 
+# =========================================================
+# Wi-Fi 卸载路线 —— WED (PPE → P3/WDMA) 还是 NPU (PPE → P7/TDMA)
+#
+#   为什么默认是 wed：原厂 H3C HM2004-DU 是**双无线芯片**设计 ——
+#     lspci: 01:00.0 14c3:790a   → npu_offload_mapping（走 NPU）
+#            01:00.0 14c3:7906   → whnat_cap_support() 支持列表（走 WED）
+#   我们的 HG5585F 只有一块 MT7916D，对应 7906，所以原厂给它走的就是 WED。
+#   （此前认定「MT7916 该走 NPU」是错的，那其实是 790a 那块的路线。）
+#
+#   wed  注入本仓库 patches/kernel-wed/ 三个补丁 + 本地包 packages/airoha-wed：
+#     960  开 NET_VENDOR_MEDIATEK + NET_MEDIATEK_SOC
+#          —— 不开的话 include/linux/soc/mediatek/mtk_wed.h 里所有 helper
+#             编译成空桩，mt7915 根本不会调 mtk_wed_device_attach()
+#     961  让 NET_MEDIATEK_SOC_WED 接受 ARCH_AIROHA（原本只认 ARCH_MEDIATEK）
+#     962  PPE 出口从 P7(CDM4/TDMA) 改 P3(GDM3/WDMA) + IB2 补 PSE_QOS
+#
+#   npu  一个都不注入：出口保持上游的 P7，走 NPU/TDMA 快转。
+#
+#   两条路线共用一个字段（FOE IB2 的 PSE_PORT），所以出口二选一，
+#   但两个模块可以共存 —— 原厂就是 mt_whnat 和 npu 都加载着的。
+# =========================================================
+REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+WIFI_OFFLOAD="${WIFI_OFFLOAD:-wed}"
+
+echo "=========================================="
+echo "Wi-Fi 卸载路线: ${WIFI_OFFLOAD}"
+echo "=========================================="
+
+if [ "$WIFI_OFFLOAD" = "wed" ]; then
+  # --- 1) SoC 侧 WED/WDMA 驱动包 ---
+  if [ -d "$REPO_DIR/packages/airoha-wed" ]; then
+    rm -rf "$PKG_DIR/airoha-wed"
+    cp -r "$REPO_DIR/packages/airoha-wed" "$PKG_DIR/"
+    echo "✅ 已拷贝本地包: airoha-wed (kmod-airoha-wed / kmod-airoha-wdma)"
+  else
+    echo "::error::缺本地包 $REPO_DIR/packages/airoha-wed，kmod-airoha-wed 会被 defconfig 剔除"
+    exit 1
+  fi
+
+  # --- 2) 内核补丁 ---
+  # 编号 96x 保证排在 ponwrt 自带的 950 之后（quilt 按文件名排序应用）
+  WED_PATCH_DIR="$REPO_DIR/patches/kernel-wed"
+  if [ -d "$WED_PATCH_DIR" ]; then
+    for p in "$WED_PATCH_DIR"/*.patch; do
+      [ -e "$p" ] || continue
+      cp "$p" target/linux/airoha/patches-6.18/
+      echo "✅ 注入内核补丁: $(basename "$p")"
+    done
+  else
+    echo "::error::缺内核补丁目录 $WED_PATCH_DIR"
+    exit 1
+  fi
+else
+  echo "   npu 路线：不注入 WED 补丁，PPE 出口保持 P7(CDM4/TDMA)"
+fi
+
 echo "🎉 diy-part1.sh 执行完毕"
