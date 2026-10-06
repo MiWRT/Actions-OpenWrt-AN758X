@@ -365,17 +365,35 @@ case "$WIFI_OFFLOAD" in
       exit 1
     fi
 
-    # --- 2) 内核补丁 ---
-    # 编号 96x 保证排在 ponwrt 自带的 950 之后（quilt 按文件名排序应用）
+    # --- 2) 补丁 ---
+    # 编号 96x 保证排在 ponwrt 自带的 950 之后（quilt 按文件名排序应用）。
+    #
+    # ⚠ 96x 里混着两类补丁，不能一股脑 cp 进 patches-6.18/：
+    #   960/961/964 改的是 target/linux/airoha/{dts,an7581/config-6.18}，
+    #   那是 OpenWrt 源码树；而 patches-6.18/ 是打在内核源码上的，里面根本没有
+    #   target/linux/ 这个路径，quilt 会静默跳过 —— 表现就是"补丁注入成功"
+    #   但 an7581-wed.dtsi 从来没被创建出来（CI 的 WED 设备树校验才发现）。
+    #   962/963 才是真正的内核补丁（drivers/net/ethernet/...）。
     WED_PATCH_DIR="$REPO_DIR/patches/kernel-wed"
     if [ -d "$WED_PATCH_DIR" ]; then
       for p in "$WED_PATCH_DIR"/*.patch; do
         [ -e "$p" ] || continue
-        cp "$p" target/linux/airoha/patches-6.18/
-        echo "✅ 注入内核补丁: $(basename "$p")"
+        if grep -qs '^+++ b/target/linux/' "$p"; then
+          if git apply -p1 --ignore-whitespace "$p"; then
+            echo "✅ 应用源码树补丁: $(basename "$p")"
+          elif patch -p1 --forward --no-backup-if-mismatch < "$p"; then
+            echo "✅ 应用源码树补丁(回退 patch): $(basename "$p")"
+          else
+            echo "::error::源码树补丁应用失败: $(basename "$p")"
+            exit 1
+          fi
+        else
+          cp "$p" target/linux/airoha/patches-6.18/
+          echo "✅ 注入内核补丁: $(basename "$p")"
+        fi
       done
     else
-      echo "::error::缺内核补丁目录 $WED_PATCH_DIR"
+      echo "::error::缺补丁目录 $WED_PATCH_DIR"
       exit 1
     fi
     ;;
