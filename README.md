@@ -216,34 +216,66 @@ MT7916 的 NPU 卸载补丁**直接推进了 `qwe3017/ponwrt` 的 `npu` 分支**
 > checkout 的是哪个分支。选错分支会拉到没有 workflow 改动（branch 默认还是 master）
 > 的那一份，等于白跑一轮。
 
-## Wi-Fi 卸载路线：`wed` / `npu`
+## Wi-Fi 卸载：下行走 WED，上行走 NPU
 
-> ⚠ **这里修正过一次结论。** 早先的判断是「MT7916 该走 NPU，WED 不用开」，理由是
-> ponwrt 里没有 `kmod-airoha-wed` 这个包。**那是错的** —— 包不存在只能说明要移植，
-> 不能说明不需要。真正的依据在下面这张 lspci 里。
+**方向以「连 WiFi 的终端」为准**：下行 = 终端接收，上行 = 终端发出。
 
-原厂 H3C HM2004-DU 是**双无线芯片**设计：
+原厂这两个方向是**两个不同的加速器各管一条**，不是二选一：
+
+```
+下行 (终端接收):
+  PPE/FOE --force_port=P3(GDM3)--> WDMA --> WED --> PCIe --> MT7916 --> 空口
+                                    ^^^^ 这一截是我们要补的全部工作量
+
+上行 (终端发出):
+  WiFi rx ring --> NPU 固件 BA 重排 --> TDMA tx --> PPE --> 有线口
+                    （NPU 固件自带，不依赖 Linux flowtable，已经在跑）
+```
+
+出处：`WED_DOWNLINK_PLAN.md` §三的实机结论（「上行已经在跑」）；NPU 固件反汇编里
+`tdma_tx_init` 真实存在并打印 `INTR_TDMA_0` / `INTR_PPE_WIFI_BUF_ID`。
+
+两者只在一个地方碰头：FOE IB2 的 `PSE_PORT` 决定「PPE 往哪送」，**只影响下行**。
+上行是 WiFi → TDMA → PPE 的**入口**方向，不走这个字段。所以把出口改成 P3
+不会动到上行——这两条可以同时开，原厂就是同时开着的。
+
+> ⚠ **这里修正过两次结论，都以实测为准，别照着旧笔记做。**
+> ① 早先判断「MT7916 该走 NPU，WED 不用开」，理由是 ponwrt 里没有
+> `kmod-airoha-wed` 这个包 —— **错的**，包不存在只说明要移植，不说明不需要。
+> ② 后来又把 WED 和 NPU 当成「两条互斥的下行路线」做成了二选一开关 —— **也错的**，
+> 它们各管一个方向。
+
+原厂 H3C HM2004-DU 是**双无线芯片**设计，lspci 里有两条独立的 PCIe 链：
 
 ```
 =====LSPCI=====
 00:00.0 Class 0604: 14c3:6899
-01:00.0 Class 0280: 14c3:790a   ← 走 NPU：npu_offload_mapping chipid=790a
+01:00.0 Class 0280: 14c3:790a   ← npu_offload_mapping chipid=790a
 00:00.0 Class 0604: 14c3:6899
-01:00.0 Class 0280: 14c3:7906   ← 走 WED：whnat_cap_support() 支持列表里是 7906
+01:00.0 Class 0280: 14c3:7906   ← whnat_cap_support() 支持列表里是 7906
 ```
 
-而 `/proc/npu_offload_5G` 对应的是 790a 那块。**本机是单块 MT7916D = 7906，原厂给
-它走的就是 WED**，不是 NPU。原厂 `mt_whnat` 加载着、IRQ 100 八秒 +773 次、
+`/proc/npu_offload_5G` 对应的是 790a 那块。**本机是单块 MT7916D = 7906。**
+原厂 `mt_whnat` 加载着、IRQ 100 八秒 +773 次、
 `WED_TX_BM_TO_WDMA_RX_DRV_TKID_MIB = 0x7fe` 非 0 —— WED 在真搬包。
 
-| 输入 | 默认 | 说明 |
-|---|---|---|
-| `wifi_offload` | **`wed`** | `wed` = PPE → P3(GDM3/WDMA) → WED → MT7916D（原厂路线）；`npu` = PPE → P7(CDM4/TDMA) → NPU |
+| 输入 | 默认 | 下行 | 上行 |
+|---|---|---|---|
+| `wifi_offload=both` | **★** | WED（P3） | NPU（TDMA tx） |
+| `wifi_offload=npu` | | NPU（P7） | NPU（TDMA tx） |
+| `wifi_offload=wed` | | WED（P3） | NPU，但摘掉 mt76 的 `CONFIG_MT7915_NPU` |
 
-两条路线**共用 FOE IB2 的 `PSE_PORT` 字段，所以出口二选一**；但模块可以共存——
-原厂就是 `mt_whnat` 和 `npu` 都加载着的。
+- `both` = 原厂组合，默认。
+- `npu` = 下行也交回 NPU，即别人已跑通的那版（`ib2 = 0x0003e0e1`，PSE_PORT=7），
+  作为已知好基线 / 回退路径。
+- `wed` = 只装下行并关掉 mt76 侧的 NPU 开关，用来**隔离验证下行到底有没有通**，
+  排除上行 NPU 的干扰。
 
-### `wed` 路线会搬这四样东西
+> ⚠ **963 必须和 WED 驱动同进同退。** 只改 force port 而 WED 没起来，包会灌进 P3
+> 没人取 → PSE 共享缓冲耗尽 → 全芯片转发停摆（`WED_DOWNLINK_PLAN.md` 记过一次
+> 11975 包积压、WiFi 每 36 秒断连）。这也正是它俩绑在同一个开关里的原因。
+
+### `both` / `wed` 会搬这些（只管下行）
 
 | 组件 | 位置 | 作用 |
 |---|---|---|

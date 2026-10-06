@@ -303,59 +303,89 @@ else
 fi
 
 # =========================================================
-# Wi-Fi 卸载路线 —— WED (PPE → P3/WDMA) 还是 NPU (PPE → P7/TDMA)
+# Wi-Fi 卸载 —— 下行 (wired -> WiFi) 与上行 (WiFi -> wired) 是两件事
 #
-#   为什么默认是 wed：原厂 H3C HM2004-DU 是**双无线芯片**设计 ——
-#     lspci: 01:00.0 14c3:790a   → npu_offload_mapping（走 NPU）
-#            01:00.0 14c3:7906   → whnat_cap_support() 支持列表（走 WED）
-#   我们的 HG5585F 只有一块 MT7916D，对应 7906，所以原厂给它走的就是 WED。
-#   （此前认定「MT7916 该走 NPU」是错的，那其实是 790a 那块的路线。）
+#   方向以「连 WiFi 的终端」为准：
+#     下行 = 终端接收：PPE/FOE → P3(GDM3) → WDMA → WED → PCIe → MT7916
+#     上行 = 终端发出：WiFi rx ring → NPU 固件 BA 重排 → TDMA tx → PPE → 有线
 #
-#   wed  注入本仓库 patches/kernel-wed/ 三个补丁 + 本地包 packages/airoha-wed：
-#     960  开 NET_VENDOR_MEDIATEK + NET_MEDIATEK_SOC
-#          —— 不开的话 include/linux/soc/mediatek/mtk_wed.h 里所有 helper
-#             编译成空桩，mt7915 根本不会调 mtk_wed_device_attach()
-#     961  让 NET_MEDIATEK_SOC_WED 接受 ARCH_AIROHA（原本只认 ARCH_MEDIATEK）
-#     962  PPE 出口从 P7(CDM4/TDMA) 改 P3(GDM3/WDMA) + IB2 补 PSE_QOS
+#   这两条不是互斥的两条路线，而是**各管一个方向**，原厂两个都用：
+#     - 上行是 NPU 固件自带的，不依赖 Linux flowtable（WED_DOWNLINK_PLAN.md
+#       §三 的实机结论：「上行已经在跑」；固件里 tdma_tx_init 真实存在，
+#       并打 INTR_TDMA_0 / INTR_PPE_WIFI_BUF_ID）
+#     - 下行要 WED 来接。这也是我们一直没通的那个方向。
 #
-#   npu  一个都不注入：出口保持上游的 P7，走 NPU/TDMA 快转。
+#   两者只在一个地方碰头：FOE IB2 的 PSE_PORT 是「PPE 往哪送」的字段，
+#   只影响下行。上行是 WiFi → TDMA → PPE 入口，不走这个字段，所以
+#   把出口改成 P3 不会动到上行。
 #
-#   两条路线共用一个字段（FOE IB2 的 PSE_PORT），所以出口二选一，
-#   但两个模块可以共存 —— 原厂就是 mt_whnat 和 npu 都加载着的。
+#   both  默认，原厂配置：下行 WED + 上行 NPU
+#         patches/kernel-wed/ 全部注入 + packages/airoha-wed 进源码树
+#   npu   都不注入：下行也回到 P7（别人已跑通的那版，作为已知好基线）
+#   wed   只装下行，并把 mt76 的 CONFIG_MT7915_NPU 摘掉 —— 用来隔离验证
+#         「下行到底有没有通」，排除上行 NPU 的干扰
+#
+#   kernel-wed 里的补丁干什么：
+#     960  wed/wdma 设备树节点（自带 airoha,wed-ops / attach-enable）
+#     961  开 NET_VENDOR_MEDIATEK + NET_MEDIATEK_SOC
+#          —— 不开的话 mtk_wed.h 里所有 helper 编译成空桩，mt7915
+#             根本不会调 mtk_wed_device_attach()
+#     962  让 NET_MEDIATEK_SOC_WED 接受 ARCH_AIROHA（原本只认 ARCH_MEDIATEK）
+#     963  PPE 出口 P7(CDM4/TDMA) → P3(GDM3/WDMA) + IB2 补 PSE_QOS
+#     964  HG5585F 把 wed/wdma 置 status="okay"
+#
+#   注意 963 与 WED 驱动必须同进同退：只改 force port 而 WED 没起来，
+#   包会灌进 P3 没人取，PSE 共享缓冲耗尽，全芯片转发停摆
+#   （WED_DOWNLINK_PLAN.md §四「必须注意的坑」记录过 11975 包积压）。
 # =========================================================
 REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-WIFI_OFFLOAD="${WIFI_OFFLOAD:-wed}"
+WIFI_OFFLOAD="${WIFI_OFFLOAD:-both}"
 
 echo "=========================================="
-echo "Wi-Fi 卸载路线: ${WIFI_OFFLOAD}"
+echo "Wi-Fi 卸载: ${WIFI_OFFLOAD}  (下行/上行 = $( [ "$WIFI_OFFLOAD" = npu ] && echo 'NPU/NPU' || echo 'WED/NPU' ))"
 echo "=========================================="
 
-if [ "$WIFI_OFFLOAD" = "wed" ]; then
-  # --- 1) SoC 侧 WED/WDMA 驱动包 ---
-  if [ -d "$REPO_DIR/packages/airoha-wed" ]; then
-    rm -rf "$PKG_DIR/airoha-wed"
-    cp -r "$REPO_DIR/packages/airoha-wed" "$PKG_DIR/"
-    echo "✅ 已拷贝本地包: airoha-wed (kmod-airoha-wed / kmod-airoha-wdma)"
-  else
-    echo "::error::缺本地包 $REPO_DIR/packages/airoha-wed，kmod-airoha-wed 会被 defconfig 剔除"
-    exit 1
-  fi
+case "$WIFI_OFFLOAD" in
+  both|wed)
+    # wed 单点模式：把 mt76 的 NPU 开关摘掉，让下行成为唯一的硬件路径
+    if [ "$WIFI_OFFLOAD" = "wed" ]; then
+      MK="package/kernel/mt76/Makefile"
+      if [ -f "$MK" ] && grep -q "CONFIG_MT7915_NPU" "$MK"; then
+        sed -i '/CONFIG_MT7915_NPU/d' "$MK"
+        echo "   ⚠ wed 单点：已从 $MK 摘掉 CONFIG_MT7915_NPU"
+      fi
+    fi
+    # --- 1) SoC 侧 WED/WDMA 驱动包 ---
+    if [ -d "$REPO_DIR/packages/airoha-wed" ]; then
+      rm -rf "$PKG_DIR/airoha-wed"
+      cp -r "$REPO_DIR/packages/airoha-wed" "$PKG_DIR/"
+      echo "✅ 已拷贝本地包: airoha-wed (kmod-airoha-wed / kmod-airoha-wdma)"
+    else
+      echo "::error::缺本地包 $REPO_DIR/packages/airoha-wed，kmod-airoha-wed 会被 defconfig 剔除"
+      exit 1
+    fi
 
-  # --- 2) 内核补丁 ---
-  # 编号 96x 保证排在 ponwrt 自带的 950 之后（quilt 按文件名排序应用）
-  WED_PATCH_DIR="$REPO_DIR/patches/kernel-wed"
-  if [ -d "$WED_PATCH_DIR" ]; then
-    for p in "$WED_PATCH_DIR"/*.patch; do
-      [ -e "$p" ] || continue
-      cp "$p" target/linux/airoha/patches-6.18/
-      echo "✅ 注入内核补丁: $(basename "$p")"
-    done
-  else
-    echo "::error::缺内核补丁目录 $WED_PATCH_DIR"
+    # --- 2) 内核补丁 ---
+    # 编号 96x 保证排在 ponwrt 自带的 950 之后（quilt 按文件名排序应用）
+    WED_PATCH_DIR="$REPO_DIR/patches/kernel-wed"
+    if [ -d "$WED_PATCH_DIR" ]; then
+      for p in "$WED_PATCH_DIR"/*.patch; do
+        [ -e "$p" ] || continue
+        cp "$p" target/linux/airoha/patches-6.18/
+        echo "✅ 注入内核补丁: $(basename "$p")"
+      done
+    else
+      echo "::error::缺内核补丁目录 $WED_PATCH_DIR"
+      exit 1
+    fi
+    ;;
+  npu)
+    echo "   npu 路线：不注入 WED 补丁，下行出口保持 P7(CDM4/TDMA)"
+    ;;
+  *)
+    echo "::error::未知 WIFI_OFFLOAD='$WIFI_OFFLOAD'（应为 both / wed / npu）"
     exit 1
-  fi
-else
-  echo "   npu 路线：不注入 WED 补丁，PPE 出口保持 P7(CDM4/TDMA)"
-fi
+    ;;
+esac
 
 echo "🎉 diy-part1.sh 执行完毕"
