@@ -1190,7 +1190,6 @@ jobs:
             echo '```'
             echo ""
             echo "---"
-            echo "> 本 Release 为滚动发布页，仅保留最新一次编译产物。"
             echo "> 每个 Release 对应一次编译，保留最近 10 次，可下载历史版本。"
           } >> release.txt
           echo "status=success" >> "$GITHUB_OUTPUT"
