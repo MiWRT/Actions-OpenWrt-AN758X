@@ -1,0 +1,179 @@
+#!/bin/bash
+# ================================================================
+# diy-part3.sh —— 拉取「可选插件（第二批）」到 package/custom
+# 运行目录: ponwrt 源码根目录（feeds 安装之后、加载 .config 之前）
+# 由 workflow 在 diy-part1.sh 之后调用。
+#
+# configs/<机型>.config 里 19 节注释 "由 diy-part3.sh 拉取" 指的就是本脚本。
+# 之前本脚本缺失，导致 config 里勾了 =y 的包没有任何源码来源，
+# make defconfig 把未知符号静默剔除，编出来的固件里就没有这些软件。
+#
+# 用法：把需要的插件开关改成 true，再到 configs/<机型>.config 里
+#       把对应 "# CONFIG_PACKAGE_xxx is not set" 改成 "=y"
+# ================================================================
+
+set -euo pipefail
+
+echo "=========================================="
+echo "拉取可选插件（第二批） (diy-part3.sh)"
+echo "=========================================="
+
+PKG_DIR="package/custom"
+mkdir -p "$PKG_DIR"
+
+# ---------------------------------------------------------
+# 插件开关
+# ---------------------------------------------------------
+ADD_NIKKI=true      # Nikki：透明代理（mihomo 内核）
+                    #   ├─ luci-app-nikki   LuCI 界面（config 里 =y 的就是它）
+                    #   ├─ nikki           核心脚本包（被 luci-app-nikki 依赖自动拉入）
+                    #   └─ mihomo-meta     提供 mihomo（nikki DEPENDS 的 +mihomo，默认变体）
+ADD_EASYTIER=true   # EasyTier：组网 VPN
+                    #   ├─ luci-app-easytier  LuCI 界面（config 里 =y 的就是它）
+                    #   ├─ easytier         核心（含 Web 控制台；构建时下载官方预编译包并校验 SHA256）
+                    #   └─ easytier-noweb   核心（无 Web 控制台，更小；与 easytier 互斥）
+                    # 注意：luci-app-easytier 不依赖核心包，想让固件开箱即用，
+                    # 必须在 config 里再加一行 CONFIG_PACKAGE_easytier=y
+                    # （或 =easytier-noweb，两者只能选其一）
+
+clone() {  # clone <url> <dir> [branch]
+  local url="$1" dir="$2" br="$3"
+  [ -d "$dir" ] && { echo "已存在，跳过: $dir"; return 0; }
+  echo "--- git clone $url -> $dir ---"
+  if [ -n "$br" ]; then
+    git clone --depth 1 -b "$br" "$url" "$dir" 2>&1 | tail -3
+  else
+    git clone --depth 1 "$url" "$dir" 2>&1 | tail -3
+  fi
+  if [ -d "$dir" ]; then
+    echo "✅ 克隆成功: $dir"
+    return 0
+  fi
+  echo "::error::克隆失败: $url"
+  return 1
+}
+
+# =========================================================
+# Nikki —— nikkinikki-org/OpenWrt-nikki（feed 结构）
+# 根目录下是多个独立包：luci-app-nikki / nikki / mihomo-meta / mihomo-alpha
+# 只拷需要的三个：
+#   luci-app-nikki（LUCI_DEPENDS +nikki）-> 自动带入 nikki
+#   nikki（DEPENDS +mihomo）              -> 由 mihomo-meta 的 PROVIDES:=mihomo 满足（默认变体）
+# 不拷 mihomo-alpha：它和 mihomo-meta CONFLICTS，只能二选一
+# =========================================================
+if [ "$ADD_NIKKI" = "true" ]; then
+  NIKKI_URL="https://github.com/nikkinikki-org/OpenWrt-nikki"
+  NIKKI_TMP="$(mktemp -d)/nikki"
+
+  if ! clone "$NIKKI_URL" "$NIKKI_TMP" main; then
+    echo "::error::OpenWrt-nikki 拉取失败，luci-app-nikki / nikki 会被 defconfig 剔除"
+    exit 1
+  fi
+
+  for p in nikki luci-app-nikki mihomo-meta; do
+    if [ ! -f "$NIKKI_TMP/$p/Makefile" ]; then
+      echo "::error::$NIKKI_TMP/$p/Makefile 不存在，包无法被索引"
+      exit 1
+    fi
+    rm -rf "$PKG_DIR/$p"
+    cp -r "$NIKKI_TMP/$p" "$PKG_DIR/"
+    echo "✅ 已拷贝: $p"
+  done
+
+  rm -rf "$NIKKI_TMP"
+fi
+
+# =========================================================
+# EasyTier —— zzwtsy/luci-app-easytier（feed 结构）
+#   easytier/            核心（含 Web 控制台）
+#   easytier-noweb/      核心（无 Web 控制台）
+#   luci-app-easytier/   LuCI 界面（不依赖核心包，核心要在 config 里单独 =y）
+#   version.mk           被 easytier*/Makefile 用 ../version.mk 引用，
+#                        必须放在 package/custom/ 下（扫描器只找 Makefile，不会误认）
+#
+# 注意：easytier-noweb/Makefile 引用 ../easytier/common.mk，
+# 所以即使只用 noweb 版，easytier/ 目录也要一起拷（只索引、不选中，无害）。
+# =========================================================
+if [ "$ADD_EASYTIER" = "true" ]; then
+  ET_URL="https://github.com/zzwtsy/luci-app-easytier"
+  ET_TMP="$(mktemp -d)/easytier"
+
+  if ! clone "$ET_URL" "$ET_TMP" main; then
+    echo "::error::luci-app-easytier 拉取失败，luci-app-easytier 会被 defconfig 剔除"
+    exit 1
+  fi
+
+  if [ ! -f "$ET_TMP/version.mk" ]; then
+    echo "::error::$ET_TMP/version.mk 不存在"
+    exit 1
+  fi
+  cp "$ET_TMP/version.mk" "$PKG_DIR/version.mk"
+  echo "✅ 已拷贝: version.mk -> $PKG_DIR/version.mk"
+
+  for p in easytier easytier-noweb luci-app-easytier; do
+    if [ ! -f "$ET_TMP/$p/Makefile" ]; then
+      echo "::error::$ET_TMP/$p/Makefile 不存在，包无法被索引"
+      exit 1
+    fi
+    rm -rf "$PKG_DIR/$p"
+    cp -r "$ET_TMP/$p" "$PKG_DIR/"
+    echo "✅ 已拷贝: $p"
+  done
+
+  rm -rf "$ET_TMP"
+fi
+
+# ---------------------------------------------------------
+# 让新包进入索引（与 diy-part1.sh 相同的重建逻辑）
+# 判据是 tmp/.packageinfo；注意删 stamp，否则 scan_unchanged 会跳过扫描
+# ---------------------------------------------------------
+if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
+  rm -f tmp/.packageinfo tmp/.targetinfo
+  rm -f tmp/info/.scan-packageinfo.stamp tmp/info/.scan-targetinfo.stamp
+  rm -f tmp/.config-package.in tmp/.config-target.in
+
+  echo ">>> make prepare-tmpinfo（重新扫描 package/ 树）"
+  make -s prepare-tmpinfo OPENWRT_BUILD= 2>&1 | tail -5 || true
+
+  echo "=========================================="
+  echo "包索引校验（判据：tmp/.packageinfo）"
+  echo "=========================================="
+  INDEX_MISS=""
+  for d in "$PKG_DIR"/*; do
+    [ -d "$d" ] || continue
+    n=$(basename "$d")
+    [ -f "$d/Makefile" ] || { echo "  -  $n（无根 Makefile，跳过）"; continue; }
+    if grep -qx "Package: $n" tmp/.packageinfo 2>/dev/null; then
+      echo "  ✅ $n"
+    else
+      echo "  ❌ $n —— tmp/.packageinfo 里查不到"
+      INDEX_MISS="$INDEX_MISS $n"
+      for f in "logs/package/$n/dump.txt" "logs/package/custom/$n/dump.txt"; do
+        [ -f "$f" ] && { echo "===== $f ====="; tail -25 "$f"; }
+      done
+    fi
+  done
+
+  # 必装插件（config 里是 =y 的）必须进索引，否则 defconfig 会静默剔除
+  REQUIRED=""
+  if [ "$ADD_NIKKI" = "true" ]; then
+    REQUIRED="$REQUIRED luci-app-nikki nikki mihomo-meta"
+  fi
+  if [ "$ADD_EASYTIER" = "true" ]; then
+    REQUIRED="$REQUIRED luci-app-easytier easytier easytier-noweb"
+  fi
+  HARD_MISS=""
+  for r in $REQUIRED; do
+    grep -qx "Package: $r" tmp/.packageinfo 2>/dev/null || HARD_MISS="$HARD_MISS $r"
+  done
+  if [ -n "$HARD_MISS" ]; then
+    echo "::error::以下必装插件未进入 tmp/.packageinfo，defconfig 会把 .config 里的 =y 静默剔除:$HARD_MISS"
+    echo "  已索引缺失清单:$INDEX_MISS"
+    exit 1
+  fi
+  [ -n "$INDEX_MISS" ] && echo "::warning::部分可选包未进入索引（不影响必装插件）:$INDEX_MISS"
+else
+  echo "未启用任何第二批插件"
+fi
+
+echo "🎉 diy-part3.sh 执行完毕"
