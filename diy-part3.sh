@@ -38,7 +38,8 @@ ADD_EASYTIER=true   # EasyTier：组网 VPN
 ADD_HARBOR=true      # Harbor File Pro：增强文件管理器（ucode 后端，需 OpenWrt 22.03+）
                     #   └─ luci-app-harbor-file-pro（单包；po 文件名需修正，见下拉取逻辑注释）
 ADD_AURORA=true      # Aurora 主题：现代 LuCI 主题（Vite + Tailwind，需 OpenWrt 23.05+）
-                    #   └─ luci-theme-aurora（单包仓库，包在仓库根目录；自带 uci-defaults 设为默认主题）
+                    #   ├─ luci-theme-aurora（单包仓库，包在仓库根目录；自带 uci-defaults 设为默认主题）
+                    #   └─ luci-app-aurora-config（主题配置 UI；po 文件名合规，无需改名）
 
 clone() {  # clone <url> <dir> [branch]
   local url="$1" dir="$2" br="$3"
@@ -190,6 +191,27 @@ if [ "$ADD_AURORA" = "true" ]; then
   echo "✅ 已拷贝: luci-theme-aurora"
 
   rm -rf "$AURORA_TMP"
+
+  # 主题配置 UI（同作者，单包仓库，包在仓库根目录）
+  AURORA_CFG_URL="https://github.com/eamonxg/luci-app-aurora-config"
+  AURORA_CFG_TMP="$(mktemp -d)/aurora-cfg"
+
+  if ! clone "$AURORA_CFG_URL" "$AURORA_CFG_TMP" master; then
+    echo "::error::luci-app-aurora-config 拉取失败，包会被 defconfig 剔除"
+    exit 1
+  fi
+
+  if [ ! -f "$AURORA_CFG_TMP/Makefile" ]; then
+    echo "::error::$AURORA_CFG_TMP/Makefile 不存在，包无法被索引"
+    exit 1
+  fi
+  rm -rf "$PKG_DIR/luci-app-aurora-config"
+  mkdir -p "$PKG_DIR/luci-app-aurora-config"
+  cp -r "$AURORA_CFG_TMP"/. "$PKG_DIR/luci-app-aurora-config/"
+  rm -rf "$PKG_DIR/luci-app-aurora-config/.git"
+  echo "✅ 已拷贝: luci-app-aurora-config"
+
+  rm -rf "$AURORA_CFG_TMP"
 fi
 
 # ---------------------------------------------------------
@@ -235,7 +257,7 @@ if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
     REQUIRED="$REQUIRED luci-app-harbor-file-pro"
   fi
   if [ "$ADD_AURORA" = "true" ]; then
-    REQUIRED="$REQUIRED luci-theme-aurora"
+    REQUIRED="$REQUIRED luci-theme-aurora luci-app-aurora-config"
   fi
   HARD_MISS=""
   for r in $REQUIRED; do
