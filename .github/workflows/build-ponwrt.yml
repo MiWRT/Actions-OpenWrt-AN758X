@@ -675,7 +675,6 @@ jobs:
 
           # diffconfig(精简配置) 必须 defconfig 展开；保留末尾输出便于排查
           echo "===== make defconfig ====="
-          make defconfig 2>&1 | tail -5
           grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9_.-]+=[ym]' .config | sort -u > /tmp/pkg_before.txt || true
           make defconfig 2>&1 | tail -5
           grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9_.-]+=[ym]' .config | sort -u > /tmp/pkg_after.txt || true
