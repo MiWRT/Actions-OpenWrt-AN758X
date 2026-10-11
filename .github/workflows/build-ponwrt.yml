@@ -680,7 +680,7 @@ jobs:
       # defconfig 取最后值；v1 按整行比会产生误报，v2 只检查符号存在性。
           WANT=/tmp/want_pkgs.txt
           grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9_.-]+=y' "$GITHUB_WORKSPACE/${CONFIG_FILE}" 2>/dev/null | sed 's/=y$//' | sort -u > "$WANT" || true
-      # diy-part2.sh 后追加的包也纳入
+       # diy-part2.sh 后追加的包也纳入
           printf '%s\n' CONFIG_PACKAGE_iw CONFIG_PACKAGE_zoneinfo-asia >> "$WANT"
           sort -u "$WANT" -o "$WANT"
 
@@ -706,7 +706,6 @@ jobs:
             exit 1
           fi
           echo "✅ defconfig 检查通过"
-
 
           # =========================================================
           # 关键包校验：defconfig 会把 feeds 里不存在的包静默剔除，
