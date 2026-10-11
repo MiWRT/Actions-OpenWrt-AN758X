@@ -675,16 +675,38 @@ jobs:
 
           # diffconfig(精简配置) 必须 defconfig 展开；保留末尾输出便于排查
           echo "===== make defconfig ====="
-          grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9_.-]+=[ym]' .config | sort -u > /tmp/pkg_before.txt || true
+          # ---- 通用防呆 v2：按符号名检查，不按 =y/=m 整行比 ----
+# 基座是全量多机型配置，同一符号基座 =m、profile =y 是常态，
+# defconfig 取最后值；v1 按整行比会产生误报，v2 只检查符号存在性。
+WANT=/tmp/want_pkgs.txt
+grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9_.-]+=y' "$GITHUB_WORKSPACE/${CONFIG_FILE}" 2>/dev/null | sed 's/=y$//' | sort -u > "$WANT" || true
+# diy-part2.sh 后追加的包也纳入
+printf '%s\n' CONFIG_PACKAGE_iw CONFIG_PACKAGE_zoneinfo-asia >> "$WANT"
+sort -u "$WANT" -o "$WANT"
+
           make defconfig 2>&1 | tail -5
-          grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9_.-]+=[ym]' .config | sort -u > /tmp/pkg_after.txt || true
-          STRIPPED="$(comm -23 /tmp/pkg_before.txt /tmp/pkg_after.txt || true)"
-          if [ -n "$STRIPPED" ]; then
-          echo "::error::以下软件包在 defconfig 后被静默剔除（feeds/源码里不存在）："
-          echo "$STRIPPED"
-          exit 1
-          fi
-          echo "✅ defconfig 未剔除任何已选软件包"
+          MISSING=""; STALE=""
+while IFS= read -r sym; do
+  [ -z "$sym" ] && continue
+  if ! grep -q "^${sym}=[ym]" .config; then
+    pkg="${sym#CONFIG_PACKAGE_}"
+    if [ -d "package/custom/$pkg" ]; then
+      MISSING="$MISSING $pkg"
+    else
+      STALE="$STALE $pkg"
+    fi
+  fi
+done < "$WANT"
+
+if [ -n "$STALE" ]; then
+  echo "::warning::以下符号在 defconfig 后不存在（上游改名/删除，或源码未提供）：$STALE"
+fi
+if [ -n "$MISSING" ]; then
+  echo "::error::diy 已提供源码，但以下包在 defconfig 后丢失：$MISSING"
+  exit 1
+fi
+echo "✅ defconfig 检查通过"
+
           # =========================================================
           # 关键包校验：defconfig 会把 feeds 里不存在的包静默剔除，
           # 这里显式确认 PON 核心链路还在，否则编出来光口不通
