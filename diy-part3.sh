@@ -35,6 +35,8 @@ ADD_EASYTIER=true   # EasyTier：组网 VPN
                     # 注意：luci-app-easytier 不依赖核心包，想让固件开箱即用，
                     # 必须在 config 里再加一行 CONFIG_PACKAGE_easytier=y
                     # （或 =easytier-noweb，两者只能选其一）
+ADD_HARBOR=true      # Harbor File Pro：增强文件管理器（ucode 后端，需 OpenWrt 22.03+）
+                    #   └─ luci-app-harbor-file-pro（单包；po 文件名需修正，见下拉取逻辑注释）
 
 clone() {  # clone <url> <dir> [branch]
   local url="$1" dir="$2" br="$3"
@@ -123,6 +125,43 @@ if [ "$ADD_EASYTIER" = "true" ]; then
   rm -rf "$ET_TMP"
 fi
 
+# =========================================================
+# Harbor File Pro —— whzhni1/luci-app-harbor-file-pro
+# 单包仓库：根下 luci-app-harbor-file-pro/ 就是包目录，直接拷。
+#
+# ⚠ po 文件名陷阱（同 diy-part1.sh 里 airoha-npu 的处理）：
+#   上游 po 叫 harbor_file_pro.po，luci.mk 按 po 主名生成 lmo，
+#   会得到 harbor_file_pro.zh-cn.lmo；但运行时按 LUCI_BASENAME
+#   （luci-app-harbor-file-pro -> harbor-file-pro）查找，
+#   对不上中文就不生效。改名为 harbor-file-pro.po 即可。
+# =========================================================
+if [ "$ADD_HARBOR" = "true" ]; then
+  HARBOR_URL="https://github.com/whzhni1/luci-app-harbor-file-pro"
+  HARBOR_TMP="$(mktemp -d)/harbor"
+
+  if ! clone "$HARBOR_URL" "$HARBOR_TMP" main; then
+    echo "::error::luci-app-harbor-file-pro 拉取失败，包会被 defconfig 剔除"
+    exit 1
+  fi
+
+  if [ ! -f "$HARBOR_TMP/luci-app-harbor-file-pro/Makefile" ]; then
+    echo "::error::$HARBOR_TMP/luci-app-harbor-file-pro/Makefile 不存在，包无法被索引"
+    exit 1
+  fi
+  rm -rf "$PKG_DIR/luci-app-harbor-file-pro"
+  cp -r "$HARBOR_TMP/luci-app-harbor-file-pro" "$PKG_DIR/"
+  echo "✅ 已拷贝: luci-app-harbor-file-pro"
+
+  # po 改名：harbor_file_pro.po -> harbor-file-pro.po（见上注释）
+  HPO_DIR="$PKG_DIR/luci-app-harbor-file-pro/po"
+  if [ -f "$HPO_DIR/zh_Hans/harbor_file_pro.po" ]; then
+    mv "$HPO_DIR/zh_Hans/harbor_file_pro.po" "$HPO_DIR/zh_Hans/harbor-file-pro.po"
+    echo "✅ po 改名: harbor_file_pro.po -> harbor-file-pro.po（luci.mk 按 LUCI_BASENAME 查找）"
+  fi
+
+  rm -rf "$HARBOR_TMP"
+fi
+
 # ---------------------------------------------------------
 # 让新包进入索引（与 diy-part1.sh 相同的重建逻辑）
 # 判据是 tmp/.packageinfo；注意删 stamp，否则 scan_unchanged 会跳过扫描
@@ -161,6 +200,9 @@ if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
   fi
   if [ "$ADD_EASYTIER" = "true" ]; then
     REQUIRED="$REQUIRED luci-app-easytier easytier easytier-noweb"
+  fi
+  if [ "$ADD_HARBOR" = "true" ]; then
+    REQUIRED="$REQUIRED luci-app-harbor-file-pro"
   fi
   HARD_MISS=""
   for r in $REQUIRED; do
