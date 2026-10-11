@@ -676,17 +676,16 @@ jobs:
           # diffconfig(精简配置) 必须 defconfig 展开；保留末尾输出便于排查
           echo "===== make defconfig ====="
           make defconfig 2>&1 | tail -5
-grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9_.-]+=[ym]' .config | sort -u > /tmp/pkg_before.txt || true
-make defconfig 2>&1 | tail -5
-grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9_.-]+=[ym]' .config | sort -u > /tmp/pkg_after.txt || true
-STRIPPED="$(comm -23 /tmp/pkg_before.txt /tmp/pkg_after.txt || true)"
-if [ -n "$STRIPPED" ]; then
-  echo "::error::以下软件包在 defconfig 后被静默剔除（feeds/源码里不存在）："
-  echo "$STRIPPED"
-  exit 1
-fi
-echo "✅ defconfig 未剔除任何已选软件包"
-
+          grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9_.-]+=[ym]' .config | sort -u > /tmp/pkg_before.txt || true
+          make defconfig 2>&1 | tail -5
+          grep -oE '^CONFIG_PACKAGE_[A-Za-z0-9_.-]+=[ym]' .config | sort -u > /tmp/pkg_after.txt || true
+          STRIPPED="$(comm -23 /tmp/pkg_before.txt /tmp/pkg_after.txt || true)"
+          if [ -n "$STRIPPED" ]; then
+          echo "::error::以下软件包在 defconfig 后被静默剔除（feeds/源码里不存在）："
+          echo "$STRIPPED"
+          exit 1
+          fi
+          echo "✅ defconfig 未剔除任何已选软件包"
           # =========================================================
           # 关键包校验：defconfig 会把 feeds 里不存在的包静默剔除，
           # 这里显式确认 PON 核心链路还在，否则编出来光口不通
