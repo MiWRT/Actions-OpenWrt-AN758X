@@ -23,7 +23,7 @@ WIFI_5G_CHANNEL="${WIFI_5G_CHANNEL:-auto}"     # 信道（auto = 自动选择）
 WIFI_5G_HTMODE="${WIFI_5G_HTMODE:-HE160}"      # 160MHz（WiFi6）；回落 HE80
 WIFI_5G_FALLBACK="${WIFI_5G_FALLBACK:-HE80}"   # 硬件不支持 160MHz 时的回落值
 
-FW_AUTHOR="${FW_AUTHOR:-qwe}"   # 允许 workflow 经环境变量覆盖（手动触发的 fw_author 输入）
+FW_AUTHOR="${FW_AUTHOR:-MiWRT}" # 允许 workflow 经环境变量覆盖（手动触发的 fw_author 输入）
 FW_BUILD_TIME="${FW_BUILD_TIME:-}"
 FW_DESC_SUFFIX="${FW_DESC_SUFFIX:-}" 
 
