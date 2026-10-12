@@ -66,16 +66,16 @@ SHOW_PON_OPTICS=0    # 只显示温度（CPU / WiFi / PON）
 但注意 `luci-app-pon-status` 卡片同样每 3 秒调一次 `ponctl`，
 两者叠加即约每 1.5 秒一次 `ponctl` 调用 —— 若在意，把 `SHOW_PON_OPTICS` 设 `0` 即可减半。
 
-## 概览页「CPU 使用率（%）」行：USR/SYS + 每核明细
+## 概览页「CPU 使用率（%）」行：总量 USR/SYS + 每核占用
 
 ImmortalWrt 的 luci 默认只给一个总占用率（图左），改为下图右的样式：
 
 ```
 CPU 使用率（%）   5%                                    ← 原来
-CPU 使用率（%）   USR: 2% SYS: 1% · C0 3%/1% C1 0%/0% C2 1%/2% C3 4%/1%
+CPU 使用率（%）   USR: 2% SYS: 1% · CPU0 3% CPU1 0% CPU2 1% CPU3 5%
 ```
 
-`C0 … C3` 依次是每个核心的「USR%/SYS%」。
+开头 `USR` / `SYS` 是总量；`CPU0 … CPU3` 依次是**每个核心的总占用率**（USR+SYS 合并）。
 
 ### 原理（别改错文件）
 
@@ -109,7 +109,10 @@ Windows 打包 / 解压 / git checkout 链路上反复丢失（`luci-app-pon-sta
 |------|------|
 | `USR` | `user + nice` |
 | `SYS` | `system + irq + softirq` |
-| 每核 | 同上，取 `/proc/stat` 的 `cpuN` 行 |
+| `CPU<n>` | 该核的 `USR + SYS`，取 `/proc/stat` 的 `cpuN` 行 |
+
+每核那个数是**先合并 USR+SYS 再取整**，不是把上面的 `USR` / `SYS` 两个整数相加 ——
+各舍一次最多会多出 1%（实测 47.6% + 4.76% 会显示成 53%，真实值是 52%）。
 
 `guest` / `guest_nice` 不计入 —— 内核已把它们算在 `user` / `nice` 里，再加一次会重复计数。
 所以 `USR + SYS` 通常**小于**旧口径的 `100 - 空闲`（后者还含 iowait / nic 等），属正常。

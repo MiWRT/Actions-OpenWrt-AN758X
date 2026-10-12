@@ -16,12 +16,12 @@
 #   也看不到每个核心各自占了多少。本脚本给出：
 #
 #     总量 USR/SYS（/proc/stat 的 cpu 汇总行）
-#     + 每个核心的 USR/SYS（cpu0 / cpu1 / ...）
+#     + 每个核心的总占用率（cpu0 / cpu1 / ...，USR+SYS 合并成一个数）
 #
 #   输出示例（4 核）：
-#     USR: 2% SYS: 1% · C0 3%/1% C1 0%/0% C2 1%/2% C3 4%/1%
+#     USR: 2% SYS: 1% · CPU0 3% CPU1 0% CPU2 1% CPU3 5%
 #
-#   其中 C<n> 后面是「该核心的 USR%/SYS%」。
+#   开头两个是总量的 USR% / SYS%；CPU<n> 后面是「该核心的总占用率」。
 #
 # 口径（与 top 的 usr/sys 对齐，不是「开机至今的平均值」）：
 #   两次 /proc/stat 采样取差值，间隔 SAMPLE_DELAY 秒
@@ -108,11 +108,17 @@ render() {
 			if (u < 0) u = 0
 			if (s < 0) s = 0
 
-			if (i == 0)
+			if (i == 0) {
 				total = sprintf("USR: %d%% SYS: %d%%", u, s)
-			else
+			}
+			else {
+				# 每核只给一个总占用率：先合并 USR+SYS 再取整，
+				# 避免两次各自四舍五入后误差累加（各 0.5% → 最多差 1%）
+				tot = int(((ub[k] - ua[k]) + (sb[k] - sa[k])) * 100 / d + 0.5)
+				if (tot > 100) tot = 100
 				# 总量与每核之间用 " · " 断开，每核之间只用空格（手机上更短）
-				cores = cores sprintf("%s C%d %d%%/%d%%", (i == 1 ? " ·" : ""), i - 1, u, s)
+				cores = cores sprintf("%s CPU%d %d%%", (i == 1 ? " ·" : ""), i - 1, tot)
+			}
 		}
 
 		# 汇总行拿不到就整行留空，交给外壳的兜底
