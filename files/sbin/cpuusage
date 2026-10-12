@@ -1,55 +1,21 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# /sbin/cpuusage —— 概览页「CPU 使用率（%）」这一行的取值来源
-#
-# 调用链：
-#   luci-mod-status/.../view/status/include/10_system.js
-#     → callCPUUsage() → rpcd 方法 luci.getCPUUsage
-#     → 由 scripts/patch-luci-cpuusage.sh 把它的取值命令改指到本脚本
-#     → 输出被原样填进「CPU 使用率（%）」这一行的单元格
-#
-# 为什么需要本文件：
-#   ImmortalWrt 的 luci-base 把该行实现成
-#     const fd = popen('top -n1 | awk \'/^CPU/ {printf("%d%", 100 - $8)}\'');
-#   只有「100 - 空闲」这一个总数，既看不出 user / system 的拆分，
-#   也看不到每个核心各自占了多少。本脚本给出：
-#
-#     总量 USR/SYS（/proc/stat 的 cpu 汇总行）
-#     + 每个核心的总占用率（cpu0 / cpu1 / ...，USR+SYS 合并成一个数）
-#
-#   输出示例（4 核）：
-#     USR: 2% SYS: 1% · CPU0 3% CPU1 0% CPU2 1% CPU3 5%
-#
-#   开头两个是总量的 USR% / SYS%；CPU<n> 后面是「该核心的总占用率」。
-#
-# 口径（与 top 的 usr/sys 对齐，不是「开机至今的平均值」）：
-#   两次 /proc/stat 采样取差值，间隔 SAMPLE_DELAY 秒
-#     USR = user + nice
-#     SYS = system + irq + softirq
-#   guest / guest_nice 不计入 —— 内核已把它们算在 user / nice 里，
-#   再加一次会重复计数。
-#
-# 兜底：采样失败（/proc/stat 读不到、两次采样无差值）时退回 luci 原来的
-#       top 口径，保证这一行永远有值，不会变成空白或 "?"。
 
 PROC_STAT="${PROC_STAT:-/proc/stat}"
 SAMPLE_DELAY="${SAMPLE_DELAY:-0.2}"
 MARK='@CPUUSAGE-SPLIT@'
 
-# 两次采样之间的间隔。
-# 小数秒需要 busybox 开了 CONFIG_FEATURE_FANCY_SLEEP；没开时 sleep 会报错，
-# 这里退回整秒 —— 数值一样，只是 rpcd 这一次调用多花 ~1 秒。
 delay() {
 	sleep "$SAMPLE_DELAY" 2>/dev/null || sleep 1
 }
 
-# luci 原来的口径：100 - 空闲（只用于兜底）
+
 legacy_usage() {
 	top -n1 2>/dev/null | awk '/^CPU/ { printf("%d%%", 100 - $8); exit }'
 }
 
-# 采样 + 计算 + 拼串，一次 awk 完成
+
 render() {
 	{
 		cat "$PROC_STAT"
@@ -59,20 +25,15 @@ render() {
 	} | awk -v MARK="$MARK" '
 	BEGIN { n = 0; part = 1 }
 
-	# 分隔标记：之后的都是第二份采样
+
 	$1 == MARK { part = 2; next }
 
-	# /proc/stat 的 cpu 汇总行与每核行：cpu / cpu0 / cpu1 / ...
-	# 用 $1 匹配而不是整行正则，避开 busybox awk 对 \t 转义的处理差异
 	$1 ~ /^cpu[0-9]*$/ {
 		t = 0
-		# 只累加 user..steal（第 2..9 列）；guest/guest_nice 不重复计
 		for (i = 2; i <= NF && i <= 9; i++)
 			t += $i
 
 		if (part == 1) {
-			# 两份采样必须用同一套键（$1，即 cpu / cpu0 / cpu1 ...），
-			# 否则 END 里 k in ta 永远为假，整段算不出来
 			key[n] = $1
 			ua[$1] = $2 + $3       # user + nice
 			sa[$1] = $4 + $7 + $8  # system + irq + softirq
@@ -93,13 +54,11 @@ render() {
 		for (i = 0; i < n; i++) {
 			k = key[i]
 
-			# 第二次采样缺失（/proc/stat 中途读不到）→ 整行不给值
 			if (!(k in ta) || !(k in tb))
 				continue
 
 			d = tb[k] - ta[k]
 
-			# 两次采样之间计数器没动（间隔太短 / 挂起的系统）→ 跳过
 			if (d <= 0)
 				continue
 
@@ -112,16 +71,12 @@ render() {
 				total = sprintf("USR: %d%% SYS: %d%%", u, s)
 			}
 			else {
-				# 每核只给一个总占用率：先合并 USR+SYS 再取整，
-				# 避免两次各自四舍五入后误差累加（各 0.5% → 最多差 1%）
 				tot = int(((ub[k] - ua[k]) + (sb[k] - sa[k])) * 100 / d + 0.5)
 				if (tot > 100) tot = 100
-				# 总量与每核之间用 " · " 断开，每核之间只用空格（手机上更短）
 				cores = cores sprintf("%s CPU%d %d%%", (i == 1 ? " ·" : ""), i - 1, tot)
 			}
 		}
 
-		# 汇总行拿不到就整行留空，交给外壳的兜底
 		if (total != "")
 			print total cores
 	}
