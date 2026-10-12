@@ -3,41 +3,6 @@
 基于 P3TERX `Actions-OpenWrt` 模板重构，源码指向 [pbs05/ponwrt](https://github.com/pbs05/ponwrt)（默认分支 `master`），
 针对 AN7581 / AN7583 PON 光猫做机型选择、磁盘释放与工具链缓存。
 
-## 目录结构
-
-```
-.github/workflows/build-ponwrt.yml     主构建流程（机型可选 / 释放空间 / 工具链缓冲）
-.github/workflows/cache-keepalive.yml  每 5 天 touch 缓存，防止被回收
-diy-part1.sh    拉取可选插件到 package/custom（passwall/openclash/mosdns/lucky/tailscale 等，默认全关）
-diy-part2.sh    默认值定制：① 时区改中国（Asia/Shanghai, CST-8）
-                ② 5G WiFi：国家码 CN / 信道 auto / 频宽 160MHz
-                ③ 概览页「CPU 使用率（%）」行：USR/SYS + 每核明细
-                ④ 固件版本后追加「作者 + 构建时间」
-configs/        每机型一份精简 diffconfig（约 440 行，需 make defconfig 展开）
-files/          自定义 rootfs 文件，会自动拷进源码（sbin/tempinfo + sbin/cpuusage + 两个 uci-defaults）
-scripts/        编译期脚本：
-                  patch-luci-cpuusage.sh     把概览页 CPU 使用率行的取值命令改指 /sbin/cpuusage
-```
-
-## diy 脚本
-
-只有两个，职责单一：
-
-### 索引判据：看 `tmp/.packageinfo`，不看 `package/feeds/custom`
-
-`diy-part1.sh` 把包放进 `package/custom/` 就够了 —— `prepare-tmpinfo` 直接扫
-`package/` 目录树（`find -L package -maxdepth 5 -name Makefile`），深度 3 的
-`package/custom/<pkg>/Makefile` 必然被扫到，**不需要注册 feed**。
-
-日志里出现 `⚠ package/feeds/custom 不存在` 是**正常现象**，不是索引失败：
-`scripts/feeds` 的 `install_src()` 发现包已经 installed（就是上面那份扫出来的）
-就直接返回，不会建符号链接。旧版本往 `feeds/luci/applications` 拷贝的兜底也已删除
-（luci 是 git feed，拷进去下次 `feeds update -a` 就会被冲掉）。
-
-> 强制重建索引时必须连 `tmp/info/.scan-*.stamp` 一起删。`prepare-tmpinfo` 有
-> `scan_unchanged` 优化，stamp 还在且没有更新的 Makefile 时会跳过扫描，
-> 于是 `tmp/.packageinfo` 被删了却没人重建。
-
 ### diy-part1.sh —— 拉插件
 
 **默认开启**：
@@ -46,7 +11,6 @@ scripts/        编译期脚本：
 |------|-----|------|
 | `ADD_AIROHA_NPU` | `luci-app-airoha-npu` | Airoha SoC 状态页：NPU 卸载 / CPU 频率与超频 / Frame Engine / PPE 流表 |
 
-另外 CI 仓库自带两个本地包（`packages/`，不走 clone，由 diy-part1.sh 拷进 `package/custom`）：
 
 | 包 | 作用 |
 |-----|------|
@@ -65,77 +29,6 @@ scripts/        编译期脚本：
 | 中文翻译 | ❌ po/ 只有 es + templates | ✅ 自带 `po/zh_Hans`，48 条全翻 |
 | 仓库结构 | ⚠ 根目录 + 同名子目录各一份，feed 索引会中断 | ✅ 单层，正常 |
 | luci.mk 路径 | 需 feeds 在固定位置 | ✅ 已修 |
-
-## 固件版本后追加「作者 + 构建时间」
-
-LuCI 概览页「固件版本」现在长这样：
-
-```
-PonWrt SNAPSHOT · qwe3017 · 2026-09-30 17:09
-```
-
-### 原理（别改错文件）
-
-LuCI 读的是 `/etc/openwrt_release` 里的 `DISTRIB_DESCRIPTION`。这个文件由
-`base-files` 提供，编译时装完 ipk 后用 `VERSION_SED_SCRIPT` 把模板里的占位符替换：
-
-| 占位符 | 含义 | ponwrt 默认 |
-|---|---|---|
-| `%D` | `VERSION_DIST` | `PonWrt` |
-| `%V` | `VERSION_NUMBER` | `SNAPSHOT` |
-| `%C` | `VERSION_CODE` | 空 |
-
-所以改的是**模板** `package/base-files/files/etc/openwrt_release`
-（`diy-part2.sh` 末段），编译时自动替换 —— 不需要首启脚本，也不会被 ipk 覆盖。
-
-> 不要写 `files/etc/openwrt_release`：那会把版本号写死，`%D %V` 就没了。
-> `os-release` 里的 `%B` 只有 `SOURCE_DATE_EPOCH` 时间戳，不可读，所以构建
-> 时间由脚本自己格式化。
-
-### 怎么改
-
-| 方式 | 做法 |
-|---|---|
-| 换作者名 | workflow 输入项 `fw_author`（默认 `qwe3017`） |
-| 固定构建时间 | 环境变量 `FW_BUILD_TIME`（留空 = 自动取构建时刻，Asia/Shanghai） |
-| 完全自定义后缀 | 环境变量 `FW_DESC_SUFFIX`（填了就忽略上面两个，例如 `\| built by A/B #1`） |
-| 改 `diy-part2.sh` 顶部常量 | 同上三个常量，编译期生效 |
-
-`FW_DESC_SUFFIX` 里带 `/` `|` `#` `&` 也没问题 —— 脚本用 perl + 环境变量传
-替换文本，不走 sed 分隔符。
-
-若 `.config` 里设了 `CONFIG_VERSION_CODE`，模板会自动保留 `%C`，不会出现连续空格。
-
-## 5G WiFi 默认值（国家码 CN / 信道 auto / 160MHz）
-
-由 `diy-part2.sh` 第 4 段实现，落在
-`files/etc/uci-defaults/96-wifi-5g-cn`（**首启执行**）。
-
-### 默认值
-
-| 选项 | 值 |
-|---|---|
-| `country` | `CN`（中国） |
-| `country_ie` | `1`（beacon 中广播国家码） |
-| `channel` | `auto`（自动选信道 / ACS） |
-| `htmode` | `HE160`（160MHz，WiFi 6）；不支持则回落 `HE80` |
-
-编辑 `diy-part2.sh` 顶部的编译期常量（会被注入 uci-defaults 脚本）：
-
-```bash
-WIFI_5G_COUNTRY="${WIFI_5G_COUNTRY:-CN}"
-WIFI_5G_CHANNEL="${WIFI_5G_CHANNEL:-auto}"
-WIFI_5G_HTMODE="${WIFI_5G_HTMODE:-HE160}"
-WIFI_5G_FALLBACK="${WIFI_5G_FALLBACK:-HE80}"
-```
-
-也支持 workflow 层通过环境变量覆盖。
-
-### 注意事项
-
-- **DFS**：CN 法规下 160MHz 需要信道 36–64，其中 52–64 属 DFS 信道。
-  ACS 若选中，启动时会先做雷达检测（CAC），**WiFi 可能延迟 1–10 分钟才出现**
-  或自动跳频。这是正常现象，不是故障。
 
 ## PON 光模块卡片（概览页系统下一格）
 
