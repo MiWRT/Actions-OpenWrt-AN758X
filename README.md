@@ -11,15 +11,17 @@
 diy-part1.sh    拉取可选插件到 package/custom（passwall/openclash/mosdns/lucky/tailscale 等，默认全关）
 diy-part2.sh    默认值定制：① 时区改中国（Asia/Shanghai, CST-8）
                 ② 5G WiFi：国家码 CN / 信道 auto / 频宽 160MHz
-                ③ 固件版本后追加「作者 + 构建时间」
+                ③ 概览页「CPU 使用率（%）」行：USR/SYS + 每核明细
+                ④ 固件版本后追加「作者 + 构建时间」
 configs/        每机型一份精简 diffconfig（约 440 行，需 make defconfig 展开）
-files/          自定义 rootfs 文件，会自动拷进源码（sbin/tempinfo + 两个 uci-defaults））
+files/          自定义 rootfs 文件，会自动拷进源码（sbin/tempinfo + sbin/cpuusage + 两个 uci-defaults）
 packages/npu-clanker-template/   可选插件包的 Makefile 模板（占位符 @PKG_NAME@ 等）
-scripts/        NPU 固件脚本：
-                  build-npu-fw.sh         现编 ClankerNPU（拉源码 + riscv 工具链 + 体积自检）
-                  gen-npu-fw-package.sh   把编出的镜像包成「可选插件包」
-                  strip-default-npu-fw.sh 把 stock 固件从 target 的 DEFAULT_PACKAGES 里摘掉
-                  apply-npu-dts.sh        给机型 DTS 补 WiFi 卸载保留内存区 / firmware-name
+scripts/        编译期脚本：
+                  build-npu-fw.sh            现编 ClankerNPU（拉源码 + riscv 工具链 + 体积自检）
+                  gen-npu-fw-package.sh      把编出的镜像包成「可选插件包」
+                  strip-default-npu-fw.sh    把 stock 固件从 target 的 DEFAULT_PACKAGES 里摘掉
+                  apply-npu-dts.sh           给机型 DTS 补 WiFi 卸载保留内存区 / firmware-name
+                  patch-luci-cpuusage.sh     把概览页 CPU 使用率行的取值命令改指 /sbin/cpuusage
 ```
 
 ## diy 脚本
@@ -89,7 +91,7 @@ LuCI 读的是 `/etc/openwrt_release` 里的 `DISTRIB_DESCRIPTION`。这个文�
 | `%C` | `VERSION_CODE` | 空 |
 
 所以改的是**模板** `package/base-files/files/etc/openwrt_release`
-（`diy-part2.sh` 第 5 段），编译时自动替换 —— 不需要首启脚本，也不会被 ipk 覆盖。
+（`diy-part2.sh` 末段），编译时自动替换 —— 不需要首启脚本，也不会被 ipk 覆盖。
 
 > 不要写 `files/etc/openwrt_release`：那会把版本号写死，`%D %V` 就没了。
 > `os-release` 里的 `%B` 只有 `SOURCE_DATE_EPOCH` 时间戳，不可读，所以构建
@@ -175,6 +177,72 @@ SHOW_PON_OPTICS=0    # 只显示温度（CPU / WiFi / PON）
 `ponctl` 是 Rust 二进制、只读 sysfs，开销可忽略。
 但注意 `luci-app-pon-status` 卡片同样每 3 秒调一次 `ponctl`，
 两者叠加即约每 1.5 秒一次 `ponctl` 调用 —— 若在意，把 `SHOW_PON_OPTICS` 设 `0` 即可减半。
+
+## 概览页「CPU 使用率（%）」行：USR/SYS + 每核明细
+
+ImmortalWrt 的 luci 默认只给一个总占用率（图左），改为下图右的样式：
+
+```
+CPU 使用率（%）   5%                                    ← 原来
+CPU 使用率（%）   USR: 2% SYS: 1% · C0 3%/1% C1 0%/0% C2 1%/2% C3 4%/1%
+```
+
+`C0 … C3` 依次是每个核心的「USR%/SYS%」。
+
+### 原理（别改错文件）
+
+这一行是「前端渲染 + rpcd 取值」两段拼起来的，实际只改了后者：
+
+| 环节 | 文件 | 说明 |
+|------|------|------|
+| 文案 + 渲染 | `luci-mod-status/htdocs/.../view/status/include/10_system.js` | `_('CPU usage (%)'), cpuusage.cpuusage`，**不动** |
+| 取值 | `luci-base/root/usr/share/rpcd/ucode/luci` 的 `getCPUUsage` | 原本是 `top -n1 \| awk '/^CPU/ {printf("%d%", 100 - $8)}'` |
+| 授权 | `luci-mod-status/root/usr/share/rpcd/acl.d/luci-mod-status.json` | 已授权 `luci [ "getCPUUsage" ]`，**不动** |
+| 数据源 | `files/sbin/cpuusage`（本仓库新增） | 两次 `/proc/stat` 采样求差值 |
+
+前端拿到什么就原样塞进单元格，`luci.getCPUUsage` 在 LuCI 里也只有这一个调用方
+（整个 immortalwrt/luci 里引用它的就上面三处），所以 `scripts/patch-luci-cpuusage.sh`
+只把 `popen()` 里的**那一个命令字符串**换掉即可 —— 补丁前后只差 1 行：
+
+```diff
+-			const fd = popen('top -n1 | awk \'/^CPU/ {printf("%d%", 100 - $8)}\'');
++			const fd = popen('sh /sbin/cpuusage');
+```
+
+**为什么走 `sh /sbin/cpuusage`**：直接 exec 要求脚本带可执行位，而这个位在
+Windows 打包 / 解压 / git checkout 链路上反复丢失（`luci-app-pon-status` 的
+`ponstat-conn` 踩过同一个坑）。经 `/bin/sh` 读脚本内容就不依赖它了。
+
+### 数值口径
+
+两次 `/proc/stat` 采样（间隔 `SAMPLE_DELAY`，默认 0.2 s）取差值，**不是**开机至今的平均值：
+
+| 显示 | 计算 |
+|------|------|
+| `USR` | `user + nice` |
+| `SYS` | `system + irq + softirq` |
+| 每核 | 同上，取 `/proc/stat` 的 `cpuN` 行 |
+
+`guest` / `guest_nice` 不计入 —— 内核已把它们算在 `user` / `nice` 里，再加一次会重复计数。
+所以 `USR + SYS` 通常**小于**旧口径的 `100 - 空闲`（后者还含 iowait / nic 等），属正常。
+
+### 失败时的行为
+
+纯显示层的东西，任一环节不满足都只 `::warning::`，**不会让构建失败**：
+
+| 情况 | 表现 |
+|------|------|
+| `files/sbin/cpuusage` 不在源码树 | 跳过补丁，这一行维持原来的单个占用率 |
+| `feeds/` 下找不到 `*rpcd/ucode/luci`（换 fork / LuCI 版本不同） | 同上 |
+| 有 `getCPUUsage` 但命令行变了（上游改实现） | 同上，并提示同步本脚本的 `OLD_FIX` / `NEW_FIX` |
+| 脚本在设备上采样失败（`/proc/stat` 读不到等） | 脚本内部退回 `top -n1` 的旧口径，这一行永远有值 |
+
+想临时关掉：把 `diy-part2.sh` 里调用 `scripts/patch-luci-cpuusage.sh` 的那段注释掉即可。
+
+### 想换显示格式
+
+只改 `files/sbin/cpuusage` 里 awk 的 `END` 段（`sprintf` 那两行）就行，例如去掉每核明细
+只留总量：删掉拼 `cores` 的那一支即可。数值口径改 `SAMPLE_DELAY`（这行是纯变量，不必动 awk）。
 
 ## Release 行为
 
