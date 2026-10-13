@@ -8,17 +8,16 @@ env:
   BUILD_ROOT: /workdir
   SOURCE: ${{ github.event.inputs.source || 'fork' }}
   # 唯一真相源：固件版本后缀的作者名（LuCI 概览页「固件版本」）
-  FW_AUTHOR: ${{ github.event.inputs.fw_author || 'MiWRT' }}
+  FW_AUTHOR: 'qwe'
   REPO_URL: ${{ github.event.inputs.source == 'pbs05/ponwrt' && 'https://github.com/pbs05/ponwrt' || 'https://github.com/qwe3017/ponwrt' }}
   FEEDS_CONF: ''
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  DIY_P3_SH: diy-part3.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: ${{ github.event.inputs.upload_release || 'true' }}
   USE_DL_CACHE: true
-  USE_CCACHE: true
+  USE_CCACHE: false
   TZ: Asia/Shanghai
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   REPO_BRANCH: ${{ github.event.inputs.branch || 'master' }}
@@ -92,7 +91,7 @@ on:
       fw_author:
         description: '覆盖固件版本后缀的作者名（LuCI 概览页「固件版本」）。留空 = qwe'
         required: false
-        default: 'MiWRT'
+        default: 'qwe'
       upload_release:
         description: '固件发布到 Release（false 则只传 Artifact）'
         required: false
@@ -230,7 +229,7 @@ jobs:
 
           # 输入项为空时回退到 workflow 级默认值，确保 diy-part2.sh 拿到的
           # 始终是确定值，而不是空串（空串会让 LuCI 概览页显示 "·  ·"）。
-          echo "FW_AUTHOR=${FW_AUTHOR:-MiWRT}" >> "$GITHUB_ENV"
+          echo "FW_AUTHOR=${FW_AUTHOR:-qwe}" >> "$GITHUB_ENV"
 
           cd openwrt && echo "commit: $(git rev-parse --short HEAD)"
 
@@ -272,12 +271,6 @@ jobs:
           cd "$BUILD_ROOT/openwrt"
           chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
           "$GITHUB_WORKSPACE/$DIY_P1_SH"
-
-      - name: Pull extra plugins (diy-part3.sh)
-        run: |
-          cd "$BUILD_ROOT/openwrt"
-          chmod +x "$GITHUB_WORKSPACE/$DIY_P3_SH"
-          "$GITHUB_WORKSPACE/$DIY_P3_SH"
 
 
       # =========================================================
@@ -363,8 +356,7 @@ jobs:
 
           # diffconfig(精简配置) 必须 defconfig 展开；保留末尾输出便于排查
           echo "===== make defconfig ====="
-          chmod +x "$GITHUB_WORKSPACE/defconfig-guard.sh"
-          "$GITHUB_WORKSPACE/defconfig-guard.sh"
+          make defconfig 2>&1 | tail -5
 
           # =========================================================
           # 关键包校验：defconfig 会把 feeds 里不存在的包静默剔除，
@@ -670,11 +662,10 @@ jobs:
       - name: SSH connection to Actions
         uses: mxschmitt/action-tmate@v3
         if: >-
-
           (github.event.inputs.ssh == 'true' && github.event.inputs.ssh != 'false')
-          (github.event.inputs.ssh == 'true' || github.event.client_payload.ssh == 'true')
           && github.ref == 'refs/heads/master'
           && github.actor == github.repository_owner
+          && contains(github.event.action, 'ssh')
 
       # =========================================================
       # 17. 下载软件包（defconfig 已在步骤 9 执行，此处不再重复）
@@ -777,9 +768,10 @@ jobs:
             exit 0
           fi
 
-          # tag：机型 + 分支 + 时间戳，每次编译新建一个 Release，旧版本保留
-          # （delete-older-releases 步骤保留最近 10 个）
-          RELEASE_TAG=$(echo "${DEVICE_NAME}-${REPO_BRANCH}-$(date '+%Y%m%d-%H%M')" | sed 's/[^a-zA-Z0-9._-]/-/g')
+          # 固定 tag：机型 + 分支，不含时间戳、不含作者
+          # 同一机型/分支再次编译时，softprops/action-gh-release 会更新
+          # 这个已存在的 Release（同名固件自动覆盖），不会新建版本。
+          RELEASE_TAG=$(echo "${DEVICE_NAME}-${REPO_BRANCH}" | sed 's/[^a-zA-Z0-9._-]/-/g')
           echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
 
           touch release.txt
@@ -803,7 +795,8 @@ jobs:
             echo '```'
             echo ""
             echo "---"
-            echo "> 每个 Release 对应一次编译，保留最近 10 次，可下载历史版本。"
+            echo "> 本 Release 为滚动发布页，仅保留最新一次编译产物。"
+            echo "> 安装前请用 AN758x-Stock2UBI 备份原厂 flash，刷机后恢复 PON/校准数据。"
           } >> release.txt
           echo "status=success" >> "$GITHUB_OUTPUT"
 
