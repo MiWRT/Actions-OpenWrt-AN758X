@@ -1,1 +1,243 @@
-IyEvYmluL2Jhc2gKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CiMgZGl5LXBhcnQyLnNoIOKAlOKAlCDpu5jorqTlgLzlrprliLbvvIjlnKggLmNvbmZpZyDliqDovb3kuYvlkI7ov5DooYzvvIkKIyDov5DooYznm67lvZU6IHBvbndydCDmupDnoIHmoLnnm67lvZUKIwojICAgMSkg6buY6K6k5pe25Yy65pS55oiQ5Lit5Zu977yIQXNpYS9TaGFuZ2hhaSwgQ1NULTjvvIkKIyAgIDIpIDVHIFdpRmnvvJrlm73lrrbnoIEgQ07jgIHkv6HpgZMgYXV0b+OAgemikeWuvSAxNjBNSHoKIyAgIDMpIOamguiniOmhteOAjENQVSDkvb/nlKjnjofvvIgl77yJ44CN6KGM77ya5pi+56S6IFVTUi9TWVMgKyDmr4/kuKrmoLjlv4PnmoTmmI7nu4YKIyAgIDQpIOWbuuS7tueJiOacrOWQjui/veWKoOOAjOS9nOiAhSArIOaehOW7uuaXtumXtOOAjQojCiMgPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQoKc2V0IC1ldW8gcGlwZWZhaWwKCmVjaG8gIj09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PSIKZWNobyAi6buY6K6k5YC85a6a5Yi277ya5pe25Yy6ICsgNUcgV2lGaSAoZGl5LXBhcnQyLnNoKSIKZWNobyAiPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09IgoKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CiMg5Y+v6YWN572u77yaNUcg5peg57q/5Y+C5pWwCiMg5aaC6ZyA5pS55Yqo77yM55u05o6l5pS56L+Z6YeM5Y2z5Y+v77yI57yW6K+R5pyf5bi46YeP77yM5Lya5YaZ6L+bIHVjaS1kZWZhdWx0cyDohJrmnKzvvIkKIyA9PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09CldJRklfNUdfQ09VTlRSWT0iJHtXSUZJXzVHX0NPVU5UUlk6LUNOfSIgICAgICAgIyDlm73lrrbku6PnoIHvvIhDTiA9IOS4reWbve+8iQpXSUZJXzVHX0NIQU5ORUw9IiR7V0lGSV81R19DSEFOTkVMOi1hdXRvfSIgICAgICMg5L+h6YGT77yIYXV0byA9IOiHquWKqOmAieaLqe+8iQpXSUZJXzVHX0hUTU9ERT0iJHtXSUZJXzVHX0hUTU9ERTotSEUxNjB9IiAgICAgICMgMTYwTUh677yIV2lGaTbvvInvvJvlm57okL0gSEU4MApXSUZJXzVHX0ZBTExCQUNLPSIke1dJRklfNUdfRkFMTEJBQ0s6LUhFODB9IiAgICMg56Gs5Lu25LiN5pSv5oyBIDE2ME1IeiDml7bnmoTlm57okL3lgLwKCkZXX0FVVEhPUj0iJHtGV19BVVRIT1I6LU1pV1JUfSIgIyDlhYHorrggd29ya2Zsb3cg57uP546v5aKD5Y+Y6YeP6KaG55uW77yI5omL5Yqo6Kem5Y+R55qEIGZ3X2F1dGhvciDovpPlhaXvvIkKRldfQlVJTERfVElNRT0iJHtGV19CVUlMRF9USU1FOi19IgpGV19ERVNDX1NVRkZJWD0iJHtGV19ERVNDX1NVRkZJWDotfSIgCgplY2hvICLphY3nva7vvJo1RyBjb3VudHJ5PSRXSUZJXzVHX0NPVU5UUlkgY2hhbm5lbD0kV0lGSV81R19DSEFOTkVMIGh0bW9kZT0kV0lGSV81R19IVE1PREUgZmFsbGJhY2s9JFdJRklfNUdfRkFMTEJBQ0siCmVjaG8gIumFjee9ru+8mkZXX0FVVEhPUj0kRldfQVVUSE9SIgoKIyAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KIyAxLiDkv67mlLkgY29uZmlnX2dlbmVyYXRlIOeahOm7mOiupOWAvO+8iOmmluasoeW8gOacuueUn+aIkOeahCAvZXRjL2NvbmZpZy9zeXN0ZW3vvIkKIyAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KQ0ZHPSJwYWNrYWdlL2Jhc2UtZmlsZXMvZmlsZXMvYmluL2NvbmZpZ19nZW5lcmF0ZSIKCmlmIFsgLWYgIiRDRkciIF07IHRoZW4KICAjIOWFvOWuuSBAc3lzdGVtWy0xXe+8iOaXp++8ieS4jiBAc3lzdGVtWzBd77yIT3BlbldydCAyMSvvvIkKICBzZWQgLWkgInMvb3B0aW9uIHRpbWV6b25lLiovb3B0aW9uIHRpbWV6b25lICdDU1QtOCcvIiAiJENGRyIKICBzZWQgLWkgInMvb3B0aW9uIHpvbmVuYW1lLiovb3B0aW9uIHpvbmVuYW1lICdBc2lhXC9TaGFuZ2hhaScvIiAiJENGRyIKICBlY2hvICLinIUgY29uZmlnX2dlbmVyYXRlIOm7mOiupOaXtuWMuiAtPiBDU1QtOCAvIEFzaWEvU2hhbmdoYWkiCmVsc2UKICBlY2hvICI6Ondhcm5pbmc6OuacquaJvuWIsCAkQ0ZH77yM6Lez6L+H6buY6K6k5YC85L+u5pS5IgpmaQoKIyAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KIyAyLiB1Y2ktZGVmYXVsdHPvvJrljbPkvb/kv53nlZnkuobml6fphY3nva7kuZ/lvLrliLbliLfmiJDkuK3lm73ml7bljLoKIyAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KbWtkaXIgLXAgZmlsZXMvZXRjL3VjaS1kZWZhdWx0cwpjYXQgPiBmaWxlcy9ldGMvdWNpLWRlZmF1bHRzLzk5LXRpbWV6b25lLWNuIDw8J0VPRicKIyEvYmluL3NoCnVjaSAtcSBiYXRjaCA8PCdVQ0knCnNldCBzeXN0ZW0uQHN5c3RlbVswXS56b25lbmFtZT0nQXNpYS9TaGFuZ2hhaScKc2V0IHN5c3RlbS5Ac3lzdGVtWzBdLnRpbWV6b25lPSdDU1QtOCcKY29tbWl0IHN5c3RlbQpVQ0kKZXhpdCAwCkVPRgpjaG1vZCAreCBmaWxlcy9ldGMvdWNpLWRlZmF1bHRzLzk5LXRpbWV6b25lLWNuCmVjaG8gIuKchSB1Y2ktZGVmYXVsdHMg5pe25Yy66ISa5pys5bey5YaZ5YWlIgoKIyAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KIyAzLiDooaXkuIrkuprmtLLml7bljLrmlbDmja7lupPljIXvvIhMdUNJIOaYvuekuuS4juaXtuWMuuWIh+aNoumcgOimge+8iQojIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQppZiBbIC1mIC5jb25maWcgXTsgdGhlbgogIHNlZCAtaSAnL15DT05GSUdfUEFDS0FHRV96b25laW5mby1hc2lhPS9kOyAvXiMgQ09ORklHX1BBQ0tBR0Vfem9uZWluZm8tYXNpYSBpcyBub3Qgc2V0L2QnIC5jb25maWcKICBlY2hvICJDT05GSUdfUEFDS0FHRV96b25laW5mby1hc2lhPXkgICAgIyDkuprmtLLml7bljLrmlbDmja7lupPvvIjkuK3lm73ml7bljLrpnIDopoHvvIkiID4+IC5jb25maWcKICBlY2hvICLinIUgem9uZWluZm8tYXNpYSDlt7LliqDlhaUgLmNvbmZpZyIKZmkKCiMgLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tCiMgNC4gNUcgV2lGae+8muWbveWutueggSBDTiAvIOS/oemBkyBhdXRvIC8g6aKR5a69IDE2ME1IegojCiMgICAg5YiG5Lik5bGC6JC95Zyw77yaCiMgICAgICBhKSDnvJbor5HmnJ/vvJrmlLnml6Dnur8gZGV0ZWN0IOiEmuacrOeahOm7mOiupOWAvO+8iGJlc3QgZWZmb3J077yM5om+5LiN5Yiw5bCx6Lez6L+H77yJCiMgICAgICBiKSDov5DooYzmnJ/vvJp1Y2ktZGVmYXVsdHMg6aaW5ZCv5by65Yi25Yi377yI5Li76KaB5omL5q6177yM5LiO5L+d55WZ6YWN572u5Y2H57qn6YO955Sf5pWI77yJCiMKIyAgICDor7TmmI7vvJrkuI3lkIzniYjmnKwgZGV0ZWN0IOiEmuacrOi3r+W+hOS4jeWQjO+8iOacieeahOWPqyBtYWM4MDIxMS5zaCAvIG1hYzgwMjExLnVj77yJ77yMCiMgICAg5LiUIHVjaS1kZWZhdWx0cyDmiafooYzml7YgL2V0Yy9jb25maWcvd2lyZWxlc3Mg5Y+v6IO95bCa5pyq55Sf5oiQ77yMCiMgICAg5pWFIHVjaS1kZWZhdWx0cyDph4zoh6rluKbjgIzmnKrnlJ/miJDlsLHlhYjnlJ/miJDjgI3nmoTpgLvovpHjgIIKIyAtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0KCiMgLS0tLSA0YS4g57yW6K+R5pyf77ya5pS5IGRldGVjdCDohJrmnKzpu5jorqTlgLzvvIhiZXN0IGVmZm9ydO+8iSAtLS0tCkRFVEVDVF9TQ1JJUFQ9IiIKZm9yIGNhbmQgaW4gXAogICJwYWNrYWdlL2tlcm5lbC9tYWM4MDIxMS9maWxlcy9saWIvd2lmaS9tYWM4MDIxMS5zaCIgXAogICJwYWNrYWdlL2tlcm5lbC9tYWM4MDIxMS9maWxlcy9saWIvd2lmaS9tYWM4MDIxMS51YyIgXAogICJwYWNrYWdlL25ldHdvcmsvc2VydmljZXMvaG9zdGFwZC9maWxlcy9saWIvd2lmaS9tYWM4MDIxMS5zaCI7IGRvCiAgWyAtZiAiJGNhbmQiIF0gJiYgeyBERVRFQ1RfU0NSSVBUPSIkY2FuZCI7IGJyZWFrOyB9CmRvbmUKCmlmIFsgLW4gIiRERVRFQ1RfU0NSSVBUIiBdOyB0aGVuCiAgIyA1R++8iDExYSAvIGJhbmQgNWfvvInnmoTpu5jorqTkv6HpgZPmlLnmiJAgYXV0bwogIHNlZCAtaSAicy9vcHRpb24gY2hhbm5lbCAnMzYnL29wdGlvbiBjaGFubmVsICdhdXRvJy9nIiAiJERFVEVDVF9TQ1JJUFQiCiAgc2VkIC1pICJzL29wdGlvbiBjaGFubmVsPSczNicvb3B0aW9uIGNoYW5uZWw9J2F1dG8nL2ciICIkREVURUNUX1NDUklQVCIKICBlY2hvICLinIUgZGV0ZWN0IOiEmuacrOm7mOiupOS/oemBkyAtPiBhdXRvICgkREVURUNUX1NDUklQVCkiCmVsc2UKICBlY2hvICI6Ondhcm5pbmc6OuacquaJvuWIsOaXoOe6vyBkZXRlY3Qg6ISa5pys77yM6Lez6L+H57yW6K+R5pyf6buY6K6k5YC85L+u5pS577yI55SxIHVjaS1kZWZhdWx0cyDlhZzlupXvvIkiCmZpCgojIC0tLS0gNGIuIOi/kOihjOacn++8mnVjaS1kZWZhdWx0cyDpppblkK/lvLrliLbliLcgLS0tLQpta2RpciAtcCBmaWxlcy9ldGMvdWNpLWRlZmF1bHRzCmNhdCA+IGZpbGVzL2V0Yy91Y2ktZGVmYXVsdHMvOTYtd2lmaS01Zy1jbiA8PFVDRU9GCiMhL2Jpbi9zaAojIDVHIFdpRmkg6buY6K6k5YC877ya5Zu95a6256CBIENO44CB5L+h6YGTIGF1dG/jgIHpopHlrr0gMTYwTUh6CiMg55SxIGRpeS1wYXJ0Mi5zaCDnlJ/miJDvvIjnvJbor5HmnJ/luLjph4/ms6jlhaXvvIkKCkNPVU5UUlk9JyRXSUZJXzVHX0NPVU5UUlknCkNIQU5ORUw9JyRXSUZJXzVHX0NIQU5ORUwnCkhUTU9ERT0nJFdJRklfNUdfSFRNT0RFJwpGQUxMQkFDSz0nJFdJRklfNUdfRkFMTEJBQ0snCgpsb2coKSB7IGxvZ2dlciAtdCB3aWZpLTVnICJcJEAiOyB9CgojIHVjaS1kZWZhdWx0cyDlj6/og73lnKggd2lmaSBjb25maWcg5LmL5YmN5omn6KGMIOKAlOKAlCDmsqHnlJ/miJDlsLHlhYjnlJ/miJAKaWYgWyAhIC1mIC9ldGMvY29uZmlnL3dpcmVsZXNzIF07IHRoZW4KCWNvbW1hbmQgLXYgd2lmaSA+L2Rldi9udWxsIDI+JjEgJiYgd2lmaSBjb25maWcgPi9kZXYvbnVsbCAyPiYxCmZpClsgLWYgL2V0Yy9jb25maWcvd2lyZWxlc3MgXSB8fCB7IGxvZyAi5pyq5om+5YiwIC9ldGMvY29uZmlnL3dpcmVsZXNz77yM6Lez6L+HIjsgZXhpdCAwOyB9CgojIOajgOa1i+ivpSBwaHkg5piv5ZCm5pSv5oyBIDE2ME1Ieu+8iOWFvOWuuSAiMTYwIE1IeiIg5LiOICI4MCs4MCBNSHoiIOS4pOenjeihqOi/sO+8iQpzdXBwb3J0XzE2MCgpIHsKCWxvY2FsIHBoeT0iXCQxIgoJWyAteiAiXCRwaHkiIF0gJiYgcmV0dXJuIDEKCWNvbW1hbmQgLXYgaXcgPi9kZXYvbnVsbCAyPiYxIHx8IHJldHVybiAxCglpdyBwaHkgIlwkcGh5IiBpbmZvIDI+L2Rldi9udWxsIHwgZ3JlcCAtcUUgJzE2MCBNSHp8ODBcKzgwIE1IeicgfHwgcmV0dXJuIDEKCXJldHVybiAwCn0KCmNoYW5nZWQ9MApmb3IgZGV2IGluIFwkKHVjaSAtcSBzaG93IHdpcmVsZXNzIHwgc2VkIC1uICdzL153aXJlbGVzc1wuXChbQS1aYS16MC05Xy1dKlwpPXdpZmktZGV2aWNlXCQvXDEvcCcpOyBkbwoJYmFuZD0iXCQodWNpIC1xIGdldCB3aXJlbGVzcy5cJGRldi5iYW5kIDI+L2Rldi9udWxsKSIKCWh3bW9kZT0iXCQodWNpIC1xIGdldCB3aXJlbGVzcy5cJGRldi5od21vZGUgMj4vZGV2L251bGwpIgoKCSMg5Y+q5aSE55CGIDVH77ya5paw54mI55SoIGJhbmQ9JzVnJ++8jOaXp+eJiOeUqCBod21vZGU9JzExYScKCWlzNWc9MAoJWyAiXCRiYW5kIiA9ICI1ZyIgXSAmJiBpczVnPTEKCVsgLXogIlwkYmFuZCIgXSAmJiBbICJcJGh3bW9kZSIgPSAiMTFhIiBdICYmIGlzNWc9MQoJWyAiXCRpczVnIiA9ICIwIiBdICYmIGNvbnRpbnVlCgoJIyDpopHlrr3vvJrnoa7orqTkuI3mlK/mjIEgMTYwTUh6IOaJjeWbnuiQvQoJIyDlj5bkuI3liLAgcGh5IOWQjeaXtuS4jeajgOa1i++8iOS/neaMgSBIVE1PREXvvInigJTigJQg6YG/5YWN5pegIHBoeSDpgInpobnnmoQgcmFkaW8g6KKr6K+v5Yik5Zue6JC9CglodD0iXCRIVE1PREUiCglwaHk9IlwkKHVjaSAtcSBnZXQgd2lyZWxlc3MuXCRkZXYucGh5IDI+L2Rldi9udWxsKSIKCWlmIFsgLW4gIlwkcGh5IiBdICYmICEgc3VwcG9ydF8xNjAgIlwkcGh5IjsgdGhlbgoJCWh0PSJcJEZBTExCQUNLIgoJCWxvZyAiXCRkZXbvvJrmnKrmo4DmtYvliLAgMTYwTUh6IOiDveWKm++8jOWbnuiQveS4uiBcJGh0IgoJZmkKCgl1Y2kgLXEgc2V0IHdpcmVsZXNzLlwkZGV2LmNvdW50cnk9IlwkQ09VTlRSWSIKCXVjaSAtcSBzZXQgd2lyZWxlc3MuXCRkZXYuY291bnRyeV9pZT0nMScKCXVjaSAtcSBzZXQgd2lyZWxlc3MuXCRkZXYuY2hhbm5lbD0iXCRDSEFOTkVMIgoJdWNpIC1xIHNldCB3aXJlbGVzcy5cJGRldi5odG1vZGU9IlwkaHQiCgoJbG9nICJcJGRldu+8mmNvdW50cnk9XCRDT1VOVFJZIGNoYW5uZWw9XCRDSEFOTkVMIGh0bW9kZT1cJGh0IgoJY2hhbmdlZD0xCmRvbmUKCmlmIFsgIlwkY2hhbmdlZCIgPSAiMSIgXTsgdGhlbgoJdWNpIC1xIGNvbW1pdCB3aXJlbGVzcwoJIyDph43ovb3ogIzpnZ7ph43lkK/vvJrpgb/lhY3pppblkK/mnJ/pl7Tml6Dnur/kuK3mlq3lkI7kuI3lj6/mgaLlpI0KCWNvbW1hbmQgLXYgd2lmaSA+L2Rldi9udWxsIDI+JjEgJiYgd2lmaSByZWxvYWQgPi9kZXYvbnVsbCAyPiYxIHx8IHRydWUKCWxvZyAi5bey5o+Q5LqkIHdpcmVsZXNzIOmFjee9riIKZWxzZQoJbG9nICLmnKrmib7liLAgNUcgcmFkaW/vvIzmnKrlgZrku7vkvZXkv67mlLkiCmZpCgpleGl0IDAKVUNFT0YKY2htb2QgK3ggZmlsZXMvZXRjL3VjaS1kZWZhdWx0cy85Ni13aWZpLTVnLWNuCmVjaG8gIuKchSB1Y2ktZGVmYXVsdHMgNUcgV2lGaSDohJrmnKzlt7LlhpnlhaXvvIhjb3VudHJ5PSRXSUZJXzVHX0NPVU5UUlkgY2hhbm5lbD0kV0lGSV81R19DSEFOTkVMIGh0bW9kZT0kV0lGSV81R19IVE1PREXvvIkiCgojIC0tLS0gNGMuIOehruS/nSBob3N0YXBkIOaUr+aMgSAxNjBNSHogLyAxMWF4IC0tLS0KIyB3cGFkLW9wZW5zc2wgPSDlrozmlbTniYggaG9zdGFwZO+8jOaUr+aMgSBIRTE2MO+8mwojIOiLpeeUqOeahOaYryB3cGFkLWJhc2ljIC8gaG9zdGFwZC1iYXNpY++8iOeyvueugOeJiO+8ie+8jDE2ME1IeiDlj6/og73kuI3nlJ/mlYjjgIIKaWYgWyAtZiAuY29uZmlnIF07IHRoZW4KICBpZiBncmVwIC1xRSAiXkNPTkZJR19QQUNLQUdFXyh3cGFkLWJhc2ljfGhvc3RhcGQtYmFzaWMpPXkiIC5jb25maWc7IHRoZW4KICAgIGVjaG8gIjo6d2FybmluZzo65qOA5rWL5Yiw57K+566A54mIIHdwYWQvaG9zdGFwZC1iYXNpY++8jDE2ME1IeiDlj6/og73kuI3mlK/mjIEiCiAgZmkKICAjIOaXoOe6v+W3peWFt++8mnVjaS1kZWZhdWx0cyDph4znmoTog73lipvmo4DmtYvpnIDopoEgaXcKICBpZiAhIGdyZXAgLXEgIl5DT05GSUdfUEFDS0FHRV9pdz15IiAuY29uZmlnOyB0aGVuCiAgICBzZWQgLWkgJy9eQ09ORklHX1BBQ0tBR0VfaXc9L2Q7IC9eIyBDT05GSUdfUEFDS0FHRV9pdyBpcyBub3Qgc2V0L2QnIC5jb25maWcKICAgIGVjaG8gIkNPTkZJR19QQUNLQUdFX2l3PXkgICAgICAgICAgICAgICAgICAgICAgICMg5peg57q/5ZG95Luk6KGM5bel5YW377yIMTYwTUh6IOiDveWKm+ajgOa1i+mcgOimge+8iSIgPj4gLmNvbmZpZwogICAgZWNobyAi4pyFIGl3IOW3suWKoOWFpSAuY29uZmlnIgogIGZpCmZpCgojIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQojIDUuIOamguiniOmhteOAjENQVSDkvb/nlKjnjofvvIgl77yJ44CN6KGM77ya5pi+56S6IFVTUi9TWVMgKyDmr4/moLjmmI7nu4YKIwojICAgIEltbW9ydGFsV3J0IOeahCBsdWNpIOaKiui/meS4gOihjOeahOWAvOWGmeaIkAojICAgICAgbHVjaS5nZXRDUFVVc2FnZSDihpIgcG9wZW4oInRvcCAtbjEgfCBhd2sgJy9eQ1BVLyB7cHJpbnRmKFwiJWQlXCIsIDEwMCAtICQ4KX0nIikKIyAgICDlj6rmnInkuIDkuKrmgLvljaDnlKjnjofjgILov5nph4zmiorlroPmlLnmjIfliLAgZmlsZXMvc2Jpbi9jcHV1c2FnZe+8iHJvb3RmcyDopobnm5bvvIwKIyAgICDlt7LnlLEgd29ya2Zsb3cg56ysIDYg5q2l5ou36L+b5rqQ56CB5qCR55qEIGZpbGVzL++8ie+8jOWJjeerryAxMF9zeXN0ZW0uanMg5LiOIEFDTAojICAgIOmDveS4jeeUqOWKqOOAggojCiMgICAg6ISa5pys6LSf6LSj5Yik5pat44CB5omT6KGl5LiB5LiO6Ieq5qOA77yM5om+5LiN5Yiw55uu5qCH5Y+qIHdhcm5pbmcg5LiN5Lit5pat57yW6K+RIOKAlOKAlAojICAgIOi/meaYr+e6r+aYvuekuuWxgueahOS4nOilv++8jOS4jeivpeiuqeWug+aKiuS4gOasoeWHoOWwj+aXtueahOaehOW7uuaQnuaMguOAggojIC0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLQpQQVRDSF9DUFVVU0FHRT0iJChkaXJuYW1lICIkMCIpL3NjcmlwdHMvcGF0Y2gtbHVjaS1jcHV1c2FnZS5zaCIKaWYgWyAtZiAiJFBBVENIX0NQVVVTQUdFIiBdOyB0aGVuCiAgUE9OV1JUX0RJUj0uIGJhc2ggIiRQQVRDSF9DUFVVU0FHRSIgfHwgdHJ1ZQplbHNlCiAgZWNobyAiOjp3YXJuaW5nOjrmnKrmib7liLAgJFBBVENIX0NQVVVTQUdF77yM6Lez6L+H5qaC6KeI6aG1IENQVSDkvb/nlKjnjofooYzlrprliLYiCmZpCgpbIC16ICIkRldfQlVJTERfVElNRSIgXSAmJiBGV19CVUlMRF9USU1FPSIkKFRaPSIke1RaOi1Bc2lhL1NoYW5naGFpfSIgZGF0ZSAnKyVZLSVtLSVkICVIOiVNJykiCgpWRVJfQ09ERT0iJChzZWQgLW4gJ3MvXkNPTkZJR19WRVJTSU9OX0NPREU9IlwoLipcKSIkL1wxL3AnIC5jb25maWcgMj4vZGV2L251bGwgfHwgdHJ1ZSkiCmlmIFsgLW4gIiRWRVJfQ09ERSIgXTsgdGhlbgogIERFU0NfQk9EWT0nJUQgJVYgJUMnCmVsc2UKICBERVNDX0JPRFk9JyVEICVWJwpmaQpbIC16ICIkRldfREVTQ19TVUZGSVgiIF0gJiYgRldfREVTQ19TVUZGSVg9IsK3ICR7RldfQVVUSE9SfSDCtyAke0ZXX0JVSUxEX1RJTUV9IgoKUkVMRUFTRV9UUEw9InBhY2thZ2UvYmFzZS1maWxlcy9maWxlcy9ldGMvb3BlbndydF9yZWxlYXNlIgpPU1JFTF9UUEw9InBhY2thZ2UvYmFzZS1maWxlcy9maWxlcy91c3IvbGliL29zLXJlbGVhc2UiCgojIOeUqCBwZXJsICsg546v5aKD5Y+Y6YeP5Lyg5pu/5o2i5paH5pys77ya5L2c6ICF5ZCNL+WQjue8gOmHjOW4piAvIHwgIyAmIOmDveS4jeS8muaQnuWdj+ivreazlQojIO+8iOebtOaOpSBzZWQgInN8Li4ufCR7RldfREVTQ19TVUZGSVh9fCIg6YGH5Yiw6L+Z5Lqb5a2X56ym5Lya54K477yJCkZXX0RFU0NfTElORT0iRElTVFJJQl9ERVNDUklQVElPTj0nJHtERVNDX0JPRFl9ICR7RldfREVTQ19TVUZGSVh9JyIKT1NSRUxfTElORT0iT1BFTldSVF9SRUxFQVNFPVwiJHtERVNDX0JPRFl9ICR7RldfREVTQ19TVUZGSVh9XCIiCmV4cG9ydCBGV19ERVNDX0xJTkUgT1NSRUxfTElORQoKaWYgWyAtZiAiJFJFTEVBU0VfVFBMIiBdOyB0aGVuCiAgIyDlj6rmm7/mjaIgRElTVFJJQl9ERVNDUklQVElPTiDooYzvvIzkuI3liqggRElTVFJJQl9JRCAvIERJU1RSSUJfUkVMRUFTRSDnrYnlhbblroPooYwKICBwZXJsIC1pIC1wZSAncy9eRElTVFJJQl9ERVNDUklQVElPTj0uKi8kRU5We0ZXX0RFU0NfTElORX0vJyAiJFJFTEVBU0VfVFBMIgogIGVjaG8gIuKchSDlm7rku7bniYjmnKzmqKHmnb8gLT4gJEZXX0RFU0NfTElORSIKZWxzZQogIGVjaG8gIjo6d2FybmluZzo65pyq5om+5YiwICRSRUxFQVNFX1RQTO+8jOWbuuS7tueJiOacrOS4jeS8muW4puaehOW7uuS/oeaBryIKZmkKCiMgb3MtcmVsZWFzZSDlkIzmraXvvIjpg6jliIblt6XlhbcvTHVDSSDniYjmnKzor7vlroPvvJslQiDlj6rmmK8gU09VUkNFX0RBVEVfRVBPQ0gg5pe26Ze05oiz77yM5LiN5aW955yL77yJCmlmIFsgLWYgIiRPU1JFTF9UUEwiIF07IHRoZW4KICBwZXJsIC1pIC1wZSAncy9eT1BFTldSVF9SRUxFQVNFPS4qLyRFTlZ7T1NSRUxfTElORX0vJyAiJE9TUkVMX1RQTCIKICBlY2hvICLinIUgb3MtcmVsZWFzZSDlkIzmraUgLT4gJE9TUkVMX0xJTkUiCmZpCgplY2hvICLwn46JIGRpeS1wYXJ0Mi5zaCDmiafooYzlrozmr5UgKGF1dGhvcj0kRldfQVVUSE9SKSIK
+#!/bin/bash
+# ================================================================
+# diy-part2.sh —— 默认值定制（在 .config 加载之后运行）
+# 运行目录: ponwrt 源码根目录
+#
+#   1) 默认时区改成中国（Asia/Shanghai, CST-8）
+#   2) 5G WiFi：国家码 CN、信道 auto、频宽 160MHz
+#   3) 概览页「CPU 使用率（%）」行：显示 USR/SYS + 每个核心的明细
+#   4) 固件版本后追加「作者 + 构建时间」
+#
+# ================================================================
+
+set -euo pipefail
+
+echo "=========================================="
+echo "默认值定制：时区 + 5G WiFi (diy-part2.sh)"
+echo "=========================================="
+
+# =============================================================
+# 可配置：5G 无线参数
+# 如需改动，直接改这里即可（编译期常量，会写进 uci-defaults 脚本）
+# =============================================================
+WIFI_5G_COUNTRY="${WIFI_5G_COUNTRY:-CN}"       # 国家代码（CN = 中国）
+WIFI_5G_CHANNEL="${WIFI_5G_CHANNEL:-auto}"     # 信道（auto = 自动选择）
+WIFI_5G_HTMODE="${WIFI_5G_HTMODE:-HE160}"      # 160MHz（WiFi6）；回落 HE80
+WIFI_5G_FALLBACK="${WIFI_5G_FALLBACK:-HE80}"   # 硬件不支持 160MHz 时的回落值
+
+FW_AUTHOR="${FW_AUTHOR:-MiWRT}" # 允许 workflow 经环境变量覆盖（手动触发的 fw_author 输入）
+FW_BUILD_TIME="${FW_BUILD_TIME:-}"
+FW_DESC_SUFFIX="${FW_DESC_SUFFIX:-}" 
+
+echo "配置：5G country=$WIFI_5G_COUNTRY channel=$WIFI_5G_CHANNEL htmode=$WIFI_5G_HTMODE fallback=$WIFI_5G_FALLBACK"
+echo "配置：FW_AUTHOR=$FW_AUTHOR"
+
+# ---------------------------------------------------------
+# 1. 修改 config_generate 的默认值（首次开机生成的 /etc/config/system）
+# ---------------------------------------------------------
+CFG="package/base-files/files/bin/config_generate"
+
+if [ -f "$CFG" ]; then
+  # 兼容 @system[-1]（旧）与 @system[0]（OpenWrt 21+）
+  sed -i "s/option timezone.*/option timezone 'CST-8'/" "$CFG"
+  sed -i "s/option zonename.*/option zonename 'Asia\/Shanghai'/" "$CFG"
+  echo "✅ config_generate 默认时区 -> CST-8 / Asia/Shanghai"
+else
+  echo "::warning::未找到 $CFG，跳过默认值修改"
+fi
+
+# ---------------------------------------------------------
+# 2. uci-defaults：即使保留了旧配置也强制刷成中国时区
+# ---------------------------------------------------------
+mkdir -p files/etc/uci-defaults
+cat > files/etc/uci-defaults/99-timezone-cn <<'EOF'
+#!/bin/sh
+uci -q batch <<'UCI'
+set system.@system[0].zonename='Asia/Shanghai'
+set system.@system[0].timezone='CST-8'
+commit system
+UCI
+exit 0
+EOF
+chmod +x files/etc/uci-defaults/99-timezone-cn
+echo "✅ uci-defaults 时区脚本已写入"
+
+# ---------------------------------------------------------
+# 3. 补上亚洲时区数据库包（LuCI 显示与时区切换需要）
+# ---------------------------------------------------------
+if [ -f .config ]; then
+  sed -i '/^CONFIG_PACKAGE_zoneinfo-asia=/d; /^# CONFIG_PACKAGE_zoneinfo-asia is not set/d' .config
+  echo "CONFIG_PACKAGE_zoneinfo-asia=y    # 亚洲时区数据库（中国时区需要）" >> .config
+  echo "✅ zoneinfo-asia 已加入 .config"
+fi
+
+# ---------------------------------------------------------
+# 4. 5G WiFi：国家码 CN / 信道 auto / 频宽 160MHz
+#
+#    分两层落地：
+#      a) 编译期：改无线 detect 脚本的默认值（best effort，找不到就跳过）
+#      b) 运行期：uci-defaults 首启强制刷（主要手段，与保留配置升级都生效）
+#
+#    说明：不同版本 detect 脚本路径不同（有的叫 mac80211.sh / mac80211.uc），
+#    且 uci-defaults 执行时 /etc/config/wireless 可能尚未生成，
+#    故 uci-defaults 里自带「未生成就先生成」的逻辑。
+# ---------------------------------------------------------
+
+# ---- 4a. 编译期：改 detect 脚本默认值（best effort） ----
+DETECT_SCRIPT=""
+for cand in \
+  "package/kernel/mac80211/files/lib/wifi/mac80211.sh" \
+  "package/kernel/mac80211/files/lib/wifi/mac80211.uc" \
+  "package/network/services/hostapd/files/lib/wifi/mac80211.sh"; do
+  [ -f "$cand" ] && { DETECT_SCRIPT="$cand"; break; }
+done
+
+if [ -n "$DETECT_SCRIPT" ]; then
+  # 5G（11a / band 5g）的默认信道改成 auto
+  sed -i "s/option channel '36'/option channel 'auto'/g" "$DETECT_SCRIPT"
+  sed -i "s/option channel='36'/option channel='auto'/g" "$DETECT_SCRIPT"
+  echo "✅ detect 脚本默认信道 -> auto ($DETECT_SCRIPT)"
+else
+  echo "::warning::未找到无线 detect 脚本，跳过编译期默认值修改（由 uci-defaults 兜底）"
+fi
+
+# ---- 4b. 运行期：uci-defaults 首启强制刷 ----
+mkdir -p files/etc/uci-defaults
+cat > files/etc/uci-defaults/96-wifi-5g-cn <<UCEOF
+#!/bin/sh
+# 5G WiFi 默认值：国家码 CN、信道 auto、频宽 160MHz
+# 由 diy-part2.sh 生成（编译期常量注入）
+
+COUNTRY='$WIFI_5G_COUNTRY'
+CHANNEL='$WIFI_5G_CHANNEL'
+HTMODE='$WIFI_5G_HTMODE'
+FALLBACK='$WIFI_5G_FALLBACK'
+
+log() { logger -t wifi-5g "\$@"; }
+
+# uci-defaults 可能在 wifi config 之前执行 —— 没生成就先生成
+if [ ! -f /etc/config/wireless ]; then
+	command -v wifi >/dev/null 2>&1 && wifi config >/dev/null 2>&1
+fi
+[ -f /etc/config/wireless ] || { log "未找到 /etc/config/wireless，跳过"; exit 0; }
+
+# 检测该 phy 是否支持 160MHz（兼容 "160 MHz" 与 "80+80 MHz" 两种表述）
+support_160() {
+	local phy="\$1"
+	[ -z "\$phy" ] && return 1
+	command -v iw >/dev/null 2>&1 || return 1
+	iw phy "\$phy" info 2>/dev/null | grep -qE '160 MHz|80\+80 MHz' || return 1
+	return 0
+}
+
+changed=0
+for dev in \$(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_-]*\)=wifi-device\$/\1/p'); do
+	band="\$(uci -q get wireless.\$dev.band 2>/dev/null)"
+	hwmode="\$(uci -q get wireless.\$dev.hwmode 2>/dev/null)"
+
+	# 只处理 5G：新版用 band='5g'，旧版用 hwmode='11a'
+	is5g=0
+	[ "\$band" = "5g" ] && is5g=1
+	[ -z "\$band" ] && [ "\$hwmode" = "11a" ] && is5g=1
+	[ "\$is5g" = "0" ] && continue
+
+	# 频宽：确认不支持 160MHz 才回落
+	# 取不到 phy 名时不检测（保持 HTMODE）—— 避免无 phy 选项的 radio 被误判回落
+	ht="\$HTMODE"
+	phy="\$(uci -q get wireless.\$dev.phy 2>/dev/null)"
+	if [ -n "\$phy" ] && ! support_160 "\$phy"; then
+		ht="\$FALLBACK"
+		log "\$dev：未检测到 160MHz 能力，回落为 \$ht"
+	fi
+
+	uci -q set wireless.\$dev.country="\$COUNTRY"
+	uci -q set wireless.\$dev.country_ie='1'
+	uci -q set wireless.\$dev.channel="\$CHANNEL"
+	uci -q set wireless.\$dev.htmode="\$ht"
+
+	log "\$dev：country=\$COUNTRY channel=\$CHANNEL htmode=\$ht"
+	changed=1
+done
+
+if [ "\$changed" = "1" ]; then
+	uci -q commit wireless
+	# 重载而非重启：避免首启期间无线中断后不可恢复
+	command -v wifi >/dev/null 2>&1 && wifi reload >/dev/null 2>&1 || true
+	log "已提交 wireless 配置"
+else
+	log "未找到 5G radio，未做任何修改"
+fi
+
+exit 0
+UCEOF
+chmod +x files/etc/uci-defaults/96-wifi-5g-cn
+echo "✅ uci-defaults 5G WiFi 脚本已写入（country=$WIFI_5G_COUNTRY channel=$WIFI_5G_CHANNEL htmode=$WIFI_5G_HTMODE）"
+
+# ---- 4c. 确保 hostapd 支持 160MHz / 11ax ----
+# wpad-openssl = 完整版 hostapd，支持 HE160；
+# 若用的是 wpad-basic / hostapd-basic（精简版），160MHz 可能不生效。
+if [ -f .config ]; then
+  if grep -qE "^CONFIG_PACKAGE_(wpad-basic|hostapd-basic)=y" .config; then
+    echo "::warning::检测到精简版 wpad/hostapd-basic，160MHz 可能不支持"
+  fi
+  # 无线工具：uci-defaults 里的能力检测需要 iw
+  if ! grep -q "^CONFIG_PACKAGE_iw=y" .config; then
+    sed -i '/^CONFIG_PACKAGE_iw=/d; /^# CONFIG_PACKAGE_iw is not set/d' .config
+    echo "CONFIG_PACKAGE_iw=y                       # 无线命令行工具（160MHz 能力检测需要）" >> .config
+    echo "✅ iw 已加入 .config"
+  fi
+fi
+
+# ---------------------------------------------------------
+# 5. 概览页「CPU 使用率（%）」行：显示 USR/SYS + 每核明细
+#
+#    ImmortalWrt 的 luci 把这一行的值写成
+#      luci.getCPUUsage → popen("top -n1 | awk '/^CPU/ {printf(\"%d%\", 100 - $8)}'")
+#    只有一个总占用率。这里把它改指到 files/sbin/cpuusage（rootfs 覆盖，
+#    已由 workflow 第 6 步拷进源码树的 files/），前端 10_system.js 与 ACL
+#    都不用动。
+#
+#    脚本负责判断、打补丁与自检，找不到目标只 warning 不中断编译 ——
+#    这是纯显示层的东西，不该让它把一次几小时的构建搞挂。
+# ---------------------------------------------------------
+PATCH_CPUUSAGE="$(dirname "$0")/scripts/patch-luci-cpuusage.sh"
+if [ -f "$PATCH_CPUUSAGE" ]; then
+  PONWRT_DIR=. bash "$PATCH_CPUUSAGE" || true
+else
+  echo "::warning::未找到 $PATCH_CPUUSAGE，跳过概览页 CPU 使用率行定制"
+fi
+
+[ -z "$FW_BUILD_TIME" ] && FW_BUILD_TIME="$(TZ="${TZ:-Asia/Shanghai}" date '+%Y-%m-%d %H:%M')"
+
+VER_CODE="$(sed -n 's/^CONFIG_VERSION_CODE="\(.*\)"$/\1/p' .config 2>/dev/null || true)"
+if [ -n "$VER_CODE" ]; then
+  DESC_BODY='%D %V %C'
+else
+  DESC_BODY='%D %V'
+fi
+[ -z "$FW_DESC_SUFFIX" ] && FW_DESC_SUFFIX="· ${FW_AUTHOR} · ${FW_BUILD_TIME}"
+
+RELEASE_TPL="package/base-files/files/etc/openwrt_release"
+OSREL_TPL="package/base-files/files/usr/lib/os-release"
+
+# 用 perl + 环境变量传替换文本：作者名/后缀里带 / | # & 都不会搞坏语法
+# （直接 sed "s|...|${FW_DESC_SUFFIX}|" 遇到这些字符会炸）
+FW_DESC_LINE="DISTRIB_DESCRIPTION='${DESC_BODY} ${FW_DESC_SUFFIX}'"
+OSREL_LINE="OPENWRT_RELEASE=\"${DESC_BODY} ${FW_DESC_SUFFIX}\""
+export FW_DESC_LINE OSREL_LINE
+
+if [ -f "$RELEASE_TPL" ]; then
+  # 只替换 DISTRIB_DESCRIPTION 行，不动 DISTRIB_ID / DISTRIB_RELEASE 等其它行
+  perl -i -pe 's/^DISTRIB_DESCRIPTION=.*/$ENV{FW_DESC_LINE}/' "$RELEASE_TPL"
+  echo "✅ 固件版本模板 -> $FW_DESC_LINE"
+else
+  echo "::warning::未找到 $RELEASE_TPL，固件版本不会带构建信息"
+fi
+
+# os-release 同步（部分工具/LuCI 版本读它；%B 只是 SOURCE_DATE_EPOCH 时间戳，不好看）
+if [ -f "$OSREL_TPL" ]; then
+  perl -i -pe 's/^OPENWRT_RELEASE=.*/$ENV{OSREL_LINE}/' "$OSREL_TPL"
+  echo "✅ os-release 同步 -> $OSREL_LINE"
+fi
+
+echo "🎉 diy-part2.sh 执行完毕 (author=$FW_AUTHOR)"

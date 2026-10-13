@@ -1,23 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0-only
 #
-# /sbin/tempinfo —— 概览页「温度」行数据源
-#
-# 调用链：
-#   luci-mod-status/.../include/10_system.js
-#     → callTempInfo() → rpcd 方法 luci.getTempInfo → 执行 /sbin/tempinfo
-#     → 输出非空则在「系统」表格插入「温度」行（if (tempinfo.tempinfo)）
-#
-# 为什么需要本文件：
-#   autocore 的 Makefile 只在 ipq% / mediatek% / qualcommax% 这几个 TARGETID
-#   下安装 files/tempinfo，airoha(AN7581/AN7583) 不在列表内，
-#   故 ponwrt 原生固件无 /sbin/tempinfo，概览页没有温度行。
-#   本文件经 files/ 覆盖进 rootfs 补齐。
-#
-# 授权：无需额外 ACL。autocore 装的
-#   /usr/share/rpcd/acl.d/luci-mod-status-autocore.json
-#   无条件授权 luci.getCPUInfo / luci.getTempInfo（受限的只是 tempinfo 脚本本身）。
-#
+
 # 输出示例：
 #   CPU: 58.7°C, WiFi: 46.0°C 48.0°C, PON: 48.5°C ↑2.41 ↓-21.30 dBm 12.50 mA 3.30 V
 
