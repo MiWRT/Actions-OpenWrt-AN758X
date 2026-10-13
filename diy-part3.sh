@@ -38,6 +38,8 @@ ADD_EASYTIER=true   # EasyTier：组网 VPN
 ADD_HARBOR=true      # Harbor File Pro：增强文件管理器（ucode 后端，需 OpenWrt 22.03+）
                     #   └─ luci-app-harbor-file-pro（单包；po 文件名需修正，见下拉取逻辑注释）
 ADD_AURORA=true      # Aurora 主题：现代 LuCI 主题（Vite + Tailwind，需 OpenWrt 23.05+）
+ADD_PARTEXP=true     # PartExp：分区格式化/扩容/自动挂载（sirpdboy）
+                    #   └─ luci-app-partexp（单包；仓库根下 luci-app-partexp/ 就是包目录）
                     #   ├─ luci-theme-aurora（单包仓库，包在仓库根目录；自带 uci-defaults 设为默认主题）
                     #   └─ luci-app-aurora-config（主题配置 UI；po 文件名合规，无需改名）
 
@@ -214,6 +216,31 @@ if [ "$ADD_AURORA" = "true" ]; then
   rm -rf "$AURORA_CFG_TMP"
 fi
 
+# =========================================================
+# PartExp —— sirpdboy/luci-app-partexp
+# 单包仓库：根下 luci-app-partexp/ 就是包目录，直接拷。
+# po 文件名 partexp.po 与 LUCI_BASENAME 对应，无需改名。
+# =========================================================
+if [ "$ADD_PARTEXP" = "true" ]; then
+  PARTEXP_URL="https://github.com/sirpdboy/luci-app-partexp"
+  PARTEXP_TMP="$(mktemp -d)/partexp"
+
+  if ! clone "$PARTEXP_URL" "$PARTEXP_TMP" main; then
+    echo "::error::luci-app-partexp 拉取失败，包会被 defconfig 剔除"
+    exit 1
+  fi
+
+  if [ ! -f "$PARTEXP_TMP/luci-app-partexp/Makefile" ]; then
+    echo "::error::$PARTEXP_TMP/luci-app-partexp/Makefile 不存在，包无法被索引"
+    exit 1
+  fi
+  rm -rf "$PKG_DIR/luci-app-partexp"
+  cp -r "$PARTEXP_TMP/luci-app-partexp" "$PKG_DIR/"
+  echo "✅ 已拷贝: luci-app-partexp"
+
+  rm -rf "$PARTEXP_TMP"
+fi
+
 # ---------------------------------------------------------
 # 让新包进入索引（与 diy-part1.sh 相同的重建逻辑）
 # 判据是 tmp/.packageinfo；注意删 stamp，否则 scan_unchanged 会跳过扫描
@@ -258,6 +285,9 @@ if [ -n "$(ls -A "$PKG_DIR" 2>/dev/null)" ]; then
   fi
   if [ "$ADD_AURORA" = "true" ]; then
     REQUIRED="$REQUIRED luci-theme-aurora luci-app-aurora-config"
+  fi
+  if [ "$ADD_PARTEXP" = "true" ]; then
+    REQUIRED="$REQUIRED luci-app-partexp"
   fi
   HARD_MISS=""
   for r in $REQUIRED; do
