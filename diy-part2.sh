@@ -21,16 +21,24 @@ echo "=========================================="
 # 如需改动，直接改这里即可（编译期常量，会写进 uci-defaults 脚本）
 # =============================================================
 WIFI_5G_COUNTRY="${WIFI_5G_COUNTRY:-CN}"       # 国家代码（CN = 中国）
-WIFI_5G_CHANNEL="${WIFI_5G_CHANNEL:-auto}"     # 信道（auto = 自动选择）
+LAN_IP="${LAN_IP:-172.16.6.1}"                  # LAN 默认 IP
+WIFI_2G_SSID="${WIFI_2G_SSID:-Moto}"            # 2.4G 默认 SSID
+WIFI_2G_KEY="${WIFI_2G_KEY:-arzin1122}"         # 2.4G 默认密码
+WIFI_2G_CHANNEL="${WIFI_2G_CHANNEL:-3}"         # 2.4G 默认信道
+WIFI_5G_SSID="${WIFI_5G_SSID:-Moto_5G}"         # 5G 默认 SSID
+WIFI_5G_KEY="${WIFI_5G_KEY:-arzin1122}"         # 5G 默认密码
+WIFI_5G_CHANNEL="${WIFI_5G_CHANNEL:-40}"      # 5G 默认信道
 WIFI_5G_HTMODE="${WIFI_5G_HTMODE:-HE160}"      # 160MHz（WiFi6）；回落 HE80
 WIFI_5G_FALLBACK="${WIFI_5G_FALLBACK:-HE80}"   # 硬件不支持 160MHz 时的回落值
 
-readonly FW_AUTHOR="qwe"
+FW_AUTHOR="${FW_AUTHOR:-MiWRT}" # 允许 workflow 经环境变量覆盖（手动触发的 fw_author 输入）
 FW_BUILD_TIME="${FW_BUILD_TIME:-}"
 FW_DESC_SUFFIX="${FW_DESC_SUFFIX:-}" 
 
-echo "配置：5G country=$WIFI_5G_COUNTRY channel=$WIFI_5G_CHANNEL htmode=$WIFI_5G_HTMODE fallback=$WIFI_5G_FALLBACK"
-echo "配置：FW_AUTHOR=$FW_AUTHOR (固定)"
+echo "配置：LAN_IP=$LAN_IP"
+echo "配置：2.4G ssid=$WIFI_2G_SSID channel=$WIFI_2G_CHANNEL"
+echo "配置：5G ssid=$WIFI_5G_SSID country=$WIFI_5G_COUNTRY channel=$WIFI_5G_CHANNEL htmode=$WIFI_5G_HTMODE fallback=$WIFI_5G_FALLBACK"
+echo "配置：FW_AUTHOR=$FW_AUTHOR"
 
 # ---------------------------------------------------------
 # 1. 修改 config_generate 的默认值（首次开机生成的 /etc/config/system）
@@ -42,6 +50,9 @@ if [ -f "$CFG" ]; then
   sed -i "s/option timezone.*/option timezone 'CST-8'/" "$CFG"
   sed -i "s/option zonename.*/option zonename 'Asia\/Shanghai'/" "$CFG"
   echo "✅ config_generate 默认时区 -> CST-8 / Asia/Shanghai"
+  # LAN 默认 IP：192.168.1.1 -> 172.16.6.1（best effort，uci-defaults 兜底）
+  sed -i "s/192\\.168\\.1\\.1/172.16.6.1/g" "$CFG"
+  echo "✅ config_generate 默认 LAN IP -> 172.16.6.1"
 else
   echo "::warning::未找到 $CFG，跳过默认值修改"
 fi
@@ -61,6 +72,28 @@ exit 0
 EOF
 chmod +x files/etc/uci-defaults/99-timezone-cn
 echo "✅ uci-defaults 时区脚本已写入"
+
+# ---------------------------------------------------------
+# 2b. uci-defaults：首启强制刷 LAN IP -> 172.16.6.1
+#     （config_generate 兜底 + 这里强制刷，双保险；
+#      保留配置升级也生效，脚本只跑一次不会反复覆盖）
+# ---------------------------------------------------------
+mkdir -p files/etc/uci-defaults
+cat > files/etc/uci-defaults/95-lan-ip <<UCEOF
+#!/bin/sh
+# LAN 默认 IP：172.16.6.1/24
+# 由 diy-part2.sh 生成
+[ -f /etc/config/network ] || exit 0
+cur="\$(uci -q get network.lan.ipaddr 2>/dev/null)"
+if [ "\$cur" != "$LAN_IP" ]; then
+  uci -q set network.lan.ipaddr="$LAN_IP"
+  uci -q commit network
+  logger -t lan-ip "LAN IP 已设为 $LAN_IP（原：\$cur）"
+fi
+exit 0
+UCEOF
+chmod +x files/etc/uci-defaults/95-lan-ip
+echo "✅ uci-defaults LAN IP 脚本已写入（->$LAN_IP）"
 
 # ---------------------------------------------------------
 # 3. 补上亚洲时区数据库包（LuCI 显示与时区切换需要）
@@ -93,10 +126,12 @@ for cand in \
 done
 
 if [ -n "$DETECT_SCRIPT" ]; then
-  # 5G（11a / band 5g）的默认信道改成 auto
-  sed -i "s/option channel '36'/option channel 'auto'/g" "$DETECT_SCRIPT"
-  sed -i "s/option channel='36'/option channel='auto'/g" "$DETECT_SCRIPT"
-  echo "✅ detect 脚本默认信道 -> auto ($DETECT_SCRIPT)"
+  # 5G（11a / band 5g）的默认信道改成 40
+  sed -i "s/option channel '36'/option channel '40'/g" "$DETECT_SCRIPT"
+  sed -i "s/option channel='36'/option channel='40'/g" "$DETECT_SCRIPT"
+  sed -i "s/option channel 'auto'/option channel '40'/g" "$DETECT_SCRIPT"
+  sed -i "s/option channel='auto'/option channel='40'/g" "$DETECT_SCRIPT"
+  echo "✅ detect 脚本默认信道 -> 40 ($DETECT_SCRIPT)"
 else
   echo "::warning::未找到无线 detect 脚本，跳过编译期默认值修改（由 uci-defaults 兜底）"
 fi
@@ -112,6 +147,8 @@ COUNTRY='$WIFI_5G_COUNTRY'
 CHANNEL='$WIFI_5G_CHANNEL'
 HTMODE='$WIFI_5G_HTMODE'
 FALLBACK='$WIFI_5G_FALLBACK'
+SSID='$WIFI_5G_SSID'
+KEY='$WIFI_5G_KEY'
 
 log() { logger -t wifi-5g "\$@"; }
 
@@ -128,6 +165,29 @@ support_160() {
 	command -v iw >/dev/null 2>&1 || return 1
 	iw phy "\$phy" info 2>/dev/null | grep -qE '160 MHz|80\+80 MHz' || return 1
 	return 0
+}
+
+# 给指定 radio 找/建 AP iface 并设 SSID + 密码（WPA2-PSK）
+set_iface() {
+	local dev="\$1" ssid="\$2" key="\$3"
+	local sec found=""
+	for sec in \$(uci -q show wireless | sed -n 's/^wireless\\.\\([A-Za-z0-9_-]*\\)=wifi-iface\$/\\1/p'); do
+		[ "\$(uci -q get wireless.\$sec.device 2>/dev/null)" = "\$dev" ] || continue
+		[ "\$(uci -q get wireless.\$sec.mode 2>/dev/null)" = "ap" ] || continue
+		found="\$sec"
+		break
+	done
+	if [ -z "\$found" ]; then
+		found="\$(uci -q add wireless wifi-iface)"
+		[ -n "\$found" ] || return 1
+		uci -q set wireless.\$found.device="\$dev"
+		uci -q set wireless.\$found.network='lan'
+		uci -q set wireless.\$found.mode='ap'
+	fi
+	uci -q set wireless.\$found.ssid="\$ssid"
+	uci -q set wireless.\$found.encryption='psk2'
+	uci -q set wireless.\$found.key="\$key"
+	log "\$dev：SSID=\$ssid（iface=\$found）"
 }
 
 changed=0
@@ -155,6 +215,8 @@ for dev in \$(uci -q show wireless | sed -n 's/^wireless\.\([A-Za-z0-9_-]*\)=wif
 	uci -q set wireless.\$dev.channel="\$CHANNEL"
 	uci -q set wireless.\$dev.htmode="\$ht"
 
+	set_iface "\$dev" "\$SSID" "\$KEY"
+
 	log "\$dev：country=\$COUNTRY channel=\$CHANNEL htmode=\$ht"
 	changed=1
 done
@@ -172,6 +234,81 @@ exit 0
 UCEOF
 chmod +x files/etc/uci-defaults/96-wifi-5g-cn
 echo "✅ uci-defaults 5G WiFi 脚本已写入（country=$WIFI_5G_COUNTRY channel=$WIFI_5G_CHANNEL htmode=$WIFI_5G_HTMODE）"
+
+# ---- 4c. 运行期：2.4G uci-defaults 首启强制刷 ----
+mkdir -p files/etc/uci-defaults
+cat > files/etc/uci-defaults/97-wifi-2g <<UCEOF
+#!/bin/sh
+# 2.4G WiFi 默认值：SSID + 密码 + 信道 3
+# 由 diy-part2.sh 生成（编译期常量注入）
+
+SSID='$WIFI_2G_SSID'
+KEY='$WIFI_2G_KEY'
+CHANNEL='$WIFI_2G_CHANNEL'
+COUNTRY='$WIFI_5G_COUNTRY'
+
+log() { logger -t wifi-2g "\$@"; }
+
+if [ ! -f /etc/config/wireless ]; then
+	command -v wifi >/dev/null 2>&1 && wifi config >/dev/null 2>&1
+fi
+[ -f /etc/config/wireless ] || { log "未找到 /etc/config/wireless，跳过"; exit 0; }
+
+# 给指定 radio 找/建 AP iface 并设 SSID + 密码（WPA2-PSK）
+set_iface() {
+	local dev="\$1" ssid="\$2" key="\$3"
+	local sec found=""
+	for sec in \$(uci -q show wireless | sed -n 's/^wireless\\.\\([A-Za-z0-9_-]*\\)=wifi-iface\$/\\1/p'); do
+		[ "\$(uci -q get wireless.\$sec.device 2>/dev/null)" = "\$dev" ] || continue
+		[ "\$(uci -q get wireless.\$sec.mode 2>/dev/null)" = "ap" ] || continue
+		found="\$sec"
+		break
+	done
+	if [ -z "\$found" ]; then
+		found="\$(uci -q add wireless wifi-iface)"
+		[ -n "\$found" ] || return 1
+		uci -q set wireless.\$found.device="\$dev"
+		uci -q set wireless.\$found.network='lan'
+		uci -q set wireless.\$found.mode='ap'
+	fi
+	uci -q set wireless.\$found.ssid="\$ssid"
+	uci -q set wireless.\$found.encryption='psk2'
+	uci -q set wireless.\$found.key="\$key"
+	log "\$dev：SSID=\$ssid（iface=\$found）"
+}
+
+changed=0
+for dev in \$(uci -q show wireless | sed -n 's/^wireless\\.\\([A-Za-z0-9_-]*\\)=wifi-device\$/\\1/p'); do
+	band="\$(uci -q get wireless.\$dev.band 2>/dev/null)"
+	hwmode="\$(uci -q get wireless.\$dev.hwmode 2>/dev/null)"
+
+	# 只处理 2.4G：新版用 band='2g'，旧版用 hwmode='11g'
+	is2g=0
+	[ "\$band" = "2g" ] && is2g=1
+	[ -z "\$band" ] && [ "\$hwmode" = "11g" ] && is2g=1
+	[ "\$is2g" = "0" ] && continue
+
+	uci -q set wireless.\$dev.country="\$COUNTRY"
+	uci -q set wireless.\$dev.country_ie='1'
+	uci -q set wireless.\$dev.channel="\$CHANNEL"
+
+	set_iface "\$dev" "\$SSID" "\$KEY"
+	log "\$dev：country=\$COUNTRY channel=\$CHANNEL"
+	changed=1
+done
+
+if [ "\$changed" = "1" ]; then
+	uci -q commit wireless
+	command -v wifi >/dev/null 2>&1 && wifi reload >/dev/null 2>&1 || true
+	log "已提交 wireless 配置"
+else
+	log "未找到 2.4G radio，未做任何修改"
+fi
+
+exit 0
+UCEOF
+chmod +x files/etc/uci-defaults/97-wifi-2g
+echo "✅ uci-defaults 2.4G WiFi 脚本已写入（ssid=$WIFI_2G_SSID channel=$WIFI_2G_CHANNEL）"
 
 # ---- 4c. 确保 hostapd 支持 160MHz / 11ax ----
 # wpad-openssl = 完整版 hostapd，支持 HE160；
