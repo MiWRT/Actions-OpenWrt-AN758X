@@ -670,7 +670,7 @@ jobs:
         uses: mxschmitt/action-tmate@v3
         if: >-
           (github.event.inputs.ssh == 'true' || github.event.client_payload.ssh == 'true')
-          && github.ref == 'refs/heads/main'
+          && github.ref == 'refs/heads/master'
           && github.actor == github.repository_owner
 
       # =========================================================
