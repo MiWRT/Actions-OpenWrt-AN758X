@@ -26,12 +26,32 @@ mkdir -p "$PKG_DIR"
 #
 # 等上游（openwrt/packages 或 mihomo）修复 1.27.2 兼容后再去掉
 # 本段。只针对已知的坏版本 1.27.2，1.27.3+ 不动。
+#
+# 注意：pin 带校验（应用后立即验证 PATCH/HASH），若校验失败
+# 立刻报错退出，不让构建白跑 2 小时后才在 mihomo-meta 挂掉。
 # ---------------------------------------------------------
 GO_MK="feeds/packages/lang/golang/golang1.27/Makefile"
-if [ -f "$GO_MK" ] && grep -q '^GO_VERSION_PATCH:=2$' "$GO_MK"; then
-  sed -i 's/^GO_VERSION_PATCH:=2$/GO_VERSION_PATCH:=1/' "$GO_MK"
-  sed -i 's/^PKG_HASH:=.*/PKG_HASH:=4e408abae126d916b6164627193f2c54f0e3ca1312d693b86db45f862ab238b1/' "$GO_MK"
-  echo "✅ golang 固定回 1.27.1（1.27.2 编 mihomo-meta 失败，已绕过）"
+GO_PIN_HASH="4e408abae126d916b6164627193f2c54f0e3ca1312d693b86db45f862ab238b1"  # Go 1.27.1 官方 hash
+if [ -f "$GO_MK" ]; then
+  GO_PATCH_NOW="$(grep -E '^GO_VERSION_PATCH:=' "$GO_MK" | head -1 | sed 's/.*:=//' | tr -d '[:space:]')"
+  if [ "$GO_PATCH_NOW" = "2" ]; then
+    sed -i -E 's/^GO_VERSION_PATCH:=.*/GO_VERSION_PATCH:=1/' "$GO_MK"
+    sed -i -E "s/^PKG_HASH:=.*/PKG_HASH:=$GO_PIN_HASH/" "$GO_MK"
+    GO_PATCH_AFTER="$(grep -E '^GO_VERSION_PATCH:=' "$GO_MK" | head -1 | sed 's/.*:=//' | tr -d '[:space:]')"
+    GO_HASH_AFTER="$(grep -E '^PKG_HASH:=' "$GO_MK" | head -1 | sed 's/.*:=//' | tr -d '[:space:]')"
+    if [ "$GO_PATCH_AFTER" = "1" ] && [ "$GO_HASH_AFTER" = "$GO_PIN_HASH" ]; then
+      echo "✅ golang 固定回 1.27.1（1.27.2 编 mihomo-meta 失败，已绕过）"
+    else
+      echo "::error::Go pin 校验失败：PATCH=$GO_PATCH_AFTER（期望 1），请检查 $GO_MK"
+      exit 1
+    fi
+  elif [ "$GO_PATCH_NOW" = "1" ]; then
+    echo "ℹ️ golang 已是 1.27.1，pin 无需重复应用"
+  else
+    echo "::warning::golang1.27 的 PATCH=$GO_PATCH_NOW（不是 1.27.2），pin 未应用；若 mihomo-meta 失败请检查 Go 版本"
+  fi
+else
+  echo "::warning::未找到 $GO_MK，Go pin 未应用；若 mihomo-meta 失败请检查 feeds"
 fi
 
 # ---------------------------------------------------------
