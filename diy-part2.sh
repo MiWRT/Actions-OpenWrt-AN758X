@@ -17,9 +17,10 @@ echo "默认值定制：时区 + 5G WiFi (diy-part2.sh)"
 echo "=========================================="
 
 # =============================================================
-# 可配置：5G 无线参数
+# 可配置：LAN IP + 无线参数
 # 如需改动，直接改这里即可（编译期常量，会写进 uci-defaults 脚本）
 # =============================================================
+LAN_IP="${LAN_IP:-172.16.6.1}"               # LAN 默认 IPv4 地址
 WIFI_5G_COUNTRY="${WIFI_5G_COUNTRY:-CN}"       # 国家代码（CN = 中国）
 WIFI_2G_SSID="${WIFI_2G_SSID:-Moto}"            # 2.4G 默认 SSID
 WIFI_2G_KEY="${WIFI_2G_KEY:-arzin1122}"         # 2.4G 默认密码
@@ -36,12 +37,13 @@ FW_AUTHOR="${FW_AUTHOR:-qwe}"
 FW_BUILD_TIME="${FW_BUILD_TIME:-}"
 FW_DESC_SUFFIX="${FW_DESC_SUFFIX:-}" 
 
+echo "配置：LAN IP=$LAN_IP/24"
 echo "配置：2.4G ssid=$WIFI_2G_SSID channel=$WIFI_2G_CHANNEL"
 echo "配置：5G ssid=$WIFI_5G_SSID country=$WIFI_5G_COUNTRY channel=$WIFI_5G_CHANNEL htmode=$WIFI_5G_HTMODE fallback=$WIFI_5G_FALLBACK"
 echo "配置：FW_AUTHOR=$FW_AUTHOR (由 workflow env.FW_AUTHOR 传入)"
 
 # ---------------------------------------------------------
-# 1. 修改 config_generate 的默认值（首次开机生成的 /etc/config/system）
+# 1. 修改 config_generate 的默认值（首次开机生成：时区 + LAN IP）
 # ---------------------------------------------------------
 CFG="package/base-files/files/bin/config_generate"
 
@@ -50,9 +52,31 @@ if [ -f "$CFG" ]; then
   sed -i "s/option timezone.*/option timezone 'CST-8'/" "$CFG"
   sed -i "s/option zonename.*/option zonename 'Asia\/Shanghai'/" "$CFG"
   echo "✅ config_generate 默认时区 -> CST-8 / Asia/Shanghai"
+  # LAN IP：默认 192.168.1.1 改成 LAN_IP（best effort，找不到就跳过）
+  sed -i "s/192\.168\.1\.1/$LAN_IP/g" "$CFG"
+  echo "✅ config_generate 默认 LAN IP -> $LAN_IP/24"
 else
   echo "::warning::未找到 $CFG，跳过默认值修改"
 fi
+
+# ---- 1b. uci-defaults：即使保留旧配置也强制刷 LAN IP ----
+# config_generate 只影响首次开机生成的默认配置；uci-defaults 保证
+# 升级保留配置时也刷成目标 IP。95 号，在 96/97 WiFi 脚本之前执行。
+mkdir -p files/etc/uci-defaults
+cat > files/etc/uci-defaults/95-lan-ip <<UCEOF
+#!/bin/sh
+# LAN IP 默认值：强制刷成 172.16.6.1/24
+# 由 diy-part2.sh 生成（编译期常量注入）
+
+LAN_IP='$LAN_IP'
+
+uci -q set network.lan.ipaddr="\$LAN_IP"
+uci -q set network.lan.netmask='255.255.255.0'
+uci -q commit network
+exit 0
+UCEOF
+chmod +x files/etc/uci-defaults/95-lan-ip
+echo "✅ uci-defaults LAN IP 脚本已写入（lan=$LAN_IP/24）"
 
 # ---------------------------------------------------------
 # 2. uci-defaults：即使保留了旧配置也强制刷成中国时区
