@@ -15,6 +15,26 @@ PKG_DIR="package/custom"
 mkdir -p "$PKG_DIR"
 
 # ---------------------------------------------------------
+# 临时固定 Go 为 1.27.1（不要用 1.27.2）
+#
+# 原因：feeds/packages 在 2026-10-13 把 golang 从 1.27.1 升到 1.27.2
+# （openwrt/packages commit 0ee3fbc，安全修复），之后 mihomo-meta
+# 编译失败：Go 报「build constraints exclude all Go files in
+# metacubex/http@v0.1.8/internal/filepath」，随后大量
+# 「no required module provides package …」。
+# 上一次成功构建（run #46，2026-10-13）用的是 1.27.1。
+#
+# 等上游（openwrt/packages 或 mihomo）修复 1.27.2 兼容后再去掉
+# 本段。只针对已知的坏版本 1.27.2，1.27.3+ 不动。
+# ---------------------------------------------------------
+GO_MK="feeds/packages/lang/golang/golang1.27/Makefile"
+if [ -f "$GO_MK" ] && grep -q '^GO_VERSION_PATCH:=2$' "$GO_MK"; then
+  sed -i 's/^GO_VERSION_PATCH:=2$/GO_VERSION_PATCH:=1/' "$GO_MK"
+  sed -i 's/^PKG_HASH:=.*/PKG_HASH:=4e408abae126d916b6164627193f2c54f0e3ca1312d693b86db45f862ab238b1/' "$GO_MK"
+  echo "✅ golang 固定回 1.27.1（1.27.2 编 mihomo-meta 失败，已绕过）"
+fi
+
+# ---------------------------------------------------------
 # 插件开关
 # 默认开启：Airoha SoC 状态页（config 里已 =y，必须拉否则 defconfig 会剔除）
 #
