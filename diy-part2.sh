@@ -30,13 +30,15 @@ WIFI_5G_CHANNEL="${WIFI_5G_CHANNEL:-40}"      # 5G 默认信道
 WIFI_5G_HTMODE="${WIFI_5G_HTMODE:-HE160}"      # 160MHz（WiFi6）；回落 HE80
 WIFI_5G_FALLBACK="${WIFI_5G_FALLBACK:-HE80}"   # 硬件不支持 160MHz 时的回落值
 
-readonly FW_AUTHOR="qwe"
+# 作者名：由 workflow 的 env.FW_AUTHOR 传入（workflow 里改为 ${{ github.repository_owner }} 即可直接读 GitHub 用户名）
+# 这里只做回落：workflow 没传时用 qwe
+FW_AUTHOR="${FW_AUTHOR:-qwe}"
 FW_BUILD_TIME="${FW_BUILD_TIME:-}"
 FW_DESC_SUFFIX="${FW_DESC_SUFFIX:-}" 
 
 echo "配置：2.4G ssid=$WIFI_2G_SSID channel=$WIFI_2G_CHANNEL"
 echo "配置：5G ssid=$WIFI_5G_SSID country=$WIFI_5G_COUNTRY channel=$WIFI_5G_CHANNEL htmode=$WIFI_5G_HTMODE fallback=$WIFI_5G_FALLBACK"
-echo "配置：FW_AUTHOR=$FW_AUTHOR (固定)"
+echo "配置：FW_AUTHOR=$FW_AUTHOR (由 workflow env.FW_AUTHOR 传入)"
 
 # ---------------------------------------------------------
 # 1. 修改 config_generate 的默认值（首次开机生成的 /etc/config/system）
@@ -297,6 +299,32 @@ if [ -f .config ]; then
     echo "✅ iw 已加入 .config"
   fi
 fi
+
+# ---------------------------------------------------------
+# 4d. 全局网络选项默认值：IPv6 ULA 前缀清空、数据包引导禁用
+#     对应 LuCI「网络 → 接口 → 全局网络选项」页。
+#     用 uci-defaults 在首启时刷（config_generate 生成的默认值会被覆盖）。
+# ---------------------------------------------------------
+mkdir -p files/etc/uci-defaults
+cat > files/etc/uci-defaults/98-network-globals <<'EOF'
+#!/bin/sh
+# 全局网络选项默认值：清空 IPv6 ULA 前缀、禁用数据包引导
+# 由 diy-part2.sh 生成
+
+# 确保 globals 段存在（缺失时新建）
+uci -q get network.globals >/dev/null 2>&1 || uci -q set network.globals=globals
+
+# IPv6 ULA 前缀：清空（不设置）
+uci -q delete network.globals.ula_prefix
+
+# 数据包引导：禁用
+uci -q set network.globals.packet_steering='0'
+
+uci -q commit network
+exit 0
+EOF
+chmod +x files/etc/uci-defaults/98-network-globals
+echo "✅ uci-defaults 全局网络选项脚本已写入（ULA 前缀清空、数据包引导禁用）"
 
 # ---------------------------------------------------------
 # 5. 概览页「CPU 使用率（%）」行：显示 USR/SYS + 每核明细
