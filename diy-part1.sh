@@ -55,6 +55,32 @@ else
 fi
 
 # ---------------------------------------------------------
+# Go 模块下载：允许 Go 下载缺失的依赖（解决 mihomo-meta 编译失败）
+#
+# 现象：mihomo-meta 编译时报大量「no required module provides package」
+# （sing/common、tailscale、zerotier-go 等），且无下载/校验报错。
+# 根因：Go 找不到 mihomo 的依赖模块——本地模块缓存（dl/go-mod-cache）
+# 里没有，且默认的 -mod=readonly 模式不允许 Go 下载缺失模块。
+#
+# 修复：通过 $GITHUB_ENV 把 GOFLAGS/GOPROXY 写给后续步骤（含 Compile）：
+#   GOFLAGS=-mod=mod              允许 Go 下载缺失模块（默认 readonly 会直接报错）
+#   GOPROXY=goproxy.cn + 官方代理 + direct   多个镜像兜底
+#   GOSUMDB=off                  跳过 sumdb 在线校验（go.sum 本身仍校验）
+#
+# 注意：只影响 Go 模块下载，不影响源码与固件内容。
+# ---------------------------------------------------------
+if [ -n "${GITHUB_ENV:-}" ]; then
+  {
+    echo "GOFLAGS=-mod=mod"
+    echo "GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct"
+    echo "GOSUMDB=off"
+  } >> "$GITHUB_ENV"
+  echo "✅ Go 模块下载已配置（GOFLAGS=-mod=mod，GOPROXY=goproxy.cn 兜底）"
+else
+  echo "::warning::未找到 \$GITHUB_ENV，Go 模块下载配置未写入（非 Actions 环境？）"
+fi
+
+# ---------------------------------------------------------
 # 插件开关
 # 默认开启：Airoha SoC 状态页（config 里已 =y，必须拉否则 defconfig 会剔除）
 #
