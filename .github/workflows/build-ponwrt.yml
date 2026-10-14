@@ -13,6 +13,7 @@ env:
   FEEDS_CONF: ''
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
+  DIY_P3_SH: diy-part3.sh
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: ${{ github.event.inputs.upload_release || 'true' }}
@@ -271,7 +272,11 @@ jobs:
           cd "$BUILD_ROOT/openwrt"
           chmod +x "$GITHUB_WORKSPACE/$DIY_P1_SH"
           "$GITHUB_WORKSPACE/$DIY_P1_SH"
-
+      - name: Pull extra plugins (diy-part3.sh)
+        run: |
+          cd "$BUILD_ROOT/openwrt"
+          chmod +x "$GITHUB_WORKSPACE/$DIY_P3_SH"
+          "$GITHUB_WORKSPACE/$DIY_P3_SH"
 
       # =========================================================
       # 6. 加载 .config —— 源码基座 defconfig 打底 + 机型精简配置追加
@@ -356,7 +361,8 @@ jobs:
 
           # diffconfig(精简配置) 必须 defconfig 展开；保留末尾输出便于排查
           echo "===== make defconfig ====="
-          make defconfig 2>&1 | tail -5
+          chmod +x "$GITHUB_WORKSPACE/defconfig-guard.sh"
+          "$GITHUB_WORKSPACE/defconfig-guard.sh"
 
           # =========================================================
           # 关键包校验：defconfig 会把 feeds 里不存在的包静默剔除，
