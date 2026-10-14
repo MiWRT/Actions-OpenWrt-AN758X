@@ -327,6 +327,24 @@ chmod +x files/etc/uci-defaults/98-network-globals
 echo "✅ uci-defaults 全局网络选项脚本已写入（ULA 前缀清空、数据包引导禁用）"
 
 # ---------------------------------------------------------
+# 4e. DNS 默认值：DNS 重定向关闭（不劫持 DNS）
+#     对应 LuCI「网络 → DNS → 常规」页的「DNS 重定向」选项。
+#     固件默认 dhcp.conf 里是 dns_redirect=1（开启，即 DNS 劫持），
+#     这里用 uci-defaults 在首启时改为 0（关闭）。
+# ---------------------------------------------------------
+mkdir -p files/etc/uci-defaults
+cat > files/etc/uci-defaults/98-dns-defaults <<'EOF'
+#!/bin/sh
+# DNS 默认值：DNS 重定向关闭（不劫持 DNS）
+# 由 diy-part2.sh 生成
+uci -q set dhcp.@dnsmasq[0].dns_redirect='0'
+uci -q commit dhcp
+exit 0
+EOF
+chmod +x files/etc/uci-defaults/98-dns-defaults
+echo "✅ uci-defaults DNS 默认脚本已写入（DNS 重定向关闭）"
+
+# ---------------------------------------------------------
 # 5. 概览页「CPU 使用率（%）」行：显示 USR/SYS + 每核明细
 #
 #    ImmortalWrt 的 luci 把这一行的值写成
