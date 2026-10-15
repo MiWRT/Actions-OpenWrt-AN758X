@@ -21,6 +21,8 @@ echo "=========================================="
 # 如需改动，直接改这里即可（编译期常量，会写进 uci-defaults 脚本）
 # =============================================================
 LAN_IP="${LAN_IP:-172.16.6.1}"               # LAN 默认 IPv4 地址
+# 主机名：用 SYS_HOSTNAME（不用 HOSTNAME——bash 内置变量已占用，会读成构建机主机名）
+SYS_HOSTNAME="${SYS_HOSTNAME:-PonWRT}"       # 默认主机名（LuCI 状态页显示）
 WIFI_5G_COUNTRY="${WIFI_5G_COUNTRY:-CN}"       # 国家代码（CN = 中国）
 WIFI_2G_SSID="${WIFI_2G_SSID:-Moto}"            # 2.4G 默认 SSID
 WIFI_2G_KEY="${WIFI_2G_KEY:-arzin1122}"         # 2.4G 默认密码
@@ -38,12 +40,13 @@ FW_BUILD_TIME="${FW_BUILD_TIME:-}"
 FW_DESC_SUFFIX="${FW_DESC_SUFFIX:-}" 
 
 echo "配置：LAN IP=$LAN_IP/24"
+echo "配置：主机名=$SYS_HOSTNAME"
 echo "配置：2.4G ssid=$WIFI_2G_SSID channel=$WIFI_2G_CHANNEL"
 echo "配置：5G ssid=$WIFI_5G_SSID country=$WIFI_5G_COUNTRY channel=$WIFI_5G_CHANNEL htmode=$WIFI_5G_HTMODE fallback=$WIFI_5G_FALLBACK"
 echo "配置：FW_AUTHOR=$FW_AUTHOR (由 workflow env.FW_AUTHOR 传入)"
 
 # ---------------------------------------------------------
-# 1. 修改 config_generate 的默认值（首次开机生成：时区 + LAN IP）
+# 1. 修改 config_generate 的默认值（首次开机生成：时区 + LAN IP + 主机名）
 # ---------------------------------------------------------
 CFG="package/base-files/files/bin/config_generate"
 
@@ -55,6 +58,9 @@ if [ -f "$CFG" ]; then
   # LAN IP：默认 192.168.1.1 改成 LAN_IP（best effort，找不到就跳过）
   sed -i "s/192\.168\.1\.1/$LAN_IP/g" "$CFG"
   echo "✅ config_generate 默认 LAN IP -> $LAN_IP/24"
+  # 主机名：默认 ponwrt 改成 SYS_HOSTNAME（best effort，找不到就跳过）
+  sed -i "s/hostname='ponwrt'/hostname='$SYS_HOSTNAME'/" "$CFG"
+  echo "✅ config_generate 默认主机名 -> $SYS_HOSTNAME"
 else
   echo "::warning::未找到 $CFG，跳过默认值修改"
 fi
@@ -77,6 +83,24 @@ exit 0
 UCEOF
 chmod +x files/etc/uci-defaults/95-lan-ip
 echo "✅ uci-defaults LAN IP 脚本已写入（lan=$LAN_IP/24）"
+
+# ---- 1c. uci-defaults：即使保留旧配置也强制刷主机名 ----
+# config_generate 只影响首次开机生成的默认配置；uci-defaults 保证
+# 升级保留配置时也刷成目标主机名。94 号，在 95-lan-ip 之前执行。
+mkdir -p files/etc/uci-defaults
+cat > files/etc/uci-defaults/94-hostname <<UCEOF
+#!/bin/sh
+# 主机名默认值：强制刷成 PonWRT
+# 由 diy-part2.sh 生成（编译期常量注入）
+
+SYS_HOSTNAME='$SYS_HOSTNAME'
+
+uci -q set system.@system[0].hostname="\$SYS_HOSTNAME"
+uci -q commit system
+exit 0
+UCEOF
+chmod +x files/etc/uci-defaults/94-hostname
+echo "✅ uci-defaults 主机名脚本已写入（hostname=$SYS_HOSTNAME）"
 
 # ---------------------------------------------------------
 # 2. uci-defaults：即使保留了旧配置也强制刷成中国时区
