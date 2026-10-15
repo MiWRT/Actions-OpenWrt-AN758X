@@ -4,8 +4,9 @@
 # 运行目录: ponwrt 源码根目录（feeds 安装之后、加载 .config 之前）
 # 由 workflow 在 diy-part1.sh 之后调用。
 #
-# M1 分支版：Nikki / EasyTier / Harbor File Pro / PartExp
+# M1 分支版：Momo / EasyTier / Harbor File Pro / PartExp
 #   + Aurora 主题 + Dufs（默认不编，保留选项）
+#   Nikki 已关闭（改用 Momo），见 ADD_NIKKI=false
 #
 # configs/<机型>.config 里对应包 =y 的那几行指的就是本脚本。
 # 本脚本缺失时，config 里勾了 =y 的包没有任何源码来源，
@@ -22,12 +23,18 @@ PKG_DIR="package/custom"
 mkdir -p "$PKG_DIR"
 
 # ---------------------------------------------------------
-# 插件开关（M1：只开验证需要的 4 组）
+# 插件开关（M1：只开验证需要的 4 组；Nikki 已关，改用 Momo）
 # ---------------------------------------------------------
-ADD_NIKKI=true      # Nikki：透明代理（mihomo 内核）
+ADD_NIKKI=false     # Nikki：透明代理（mihomo 内核）——已关闭，改用 Momo
                     #   ├─ luci-app-nikki   LuCI 界面（config 里 =y 的就是它）
                     #   ├─ nikki           核心脚本包（被 luci-app-nikki 依赖自动拉入）
                     #   └─ mihomo-meta     提供 mihomo（nikki DEPENDS 的 +mihomo，默认变体）
+ADD_MOMO=true       # Momo：透明代理（sing-box 内核，与 Nikki 同作者 nikkinikki-org）
+                    #   ├─ luci-app-momo   LuCI 界面（config 里 =y 的就是它）
+                    #   ├─ momo           核心脚本包（被 luci-app-momo 依赖自动拉入）
+                    #   └─ sing-box       代理内核（momo DEPENDS 的 +sing-box，由 feeds/packages 提供，无需拉源码）
+                    # 注意：Momo 是 sing-box 方案，配置格式与 Nikki（mihomo YAML）不同，
+                    # 不能直接沿用 Nikki 的订阅/配置文件，需用支持 sing-box 的订阅或手动转换。
 ADD_EASYTIER=true   # EasyTier：组网 VPN
                     #   ├─ luci-app-easytier  LuCI 界面（config 里 =y 的就是它）
                     #   ├─ easytier         核心（含 Web 控制台；构建时下载官方预编译包并校验 SHA256）
@@ -90,6 +97,35 @@ if [ "$ADD_NIKKI" = "true" ]; then
   done
 
   rm -rf "$NIKKI_TMP"
+fi
+
+# =========================================================
+# Momo —— nikkinikki-org/OpenWrt-momo（feed 结构，与 Nikki 同作者）
+# 根目录下是两个独立包：momo / luci-app-momo
+#   luci-app-momo（LUCI_DEPENDS +momo）-> 自动带入 momo
+#   momo（DEPENDS +sing-box）           -> sing-box 由 feeds/packages 提供，无需拉源码
+# 注意：不要和 Nikki 同时开——两者都是透明代理，会抢防火墙/nft 规则。
+# =========================================================
+if [ "$ADD_MOMO" = "true" ]; then
+  MOMO_URL="https://github.com/nikkinikki-org/OpenWrt-momo"
+  MOMO_TMP="$(mktemp -d)/momo"
+
+  if ! clone "$MOMO_URL" "$MOMO_TMP" main; then
+    echo "::error::OpenWrt-momo 拉取失败，luci-app-momo / momo 会被 defconfig 剔除"
+    exit 1
+  fi
+
+  for p in momo luci-app-momo; do
+    if [ ! -f "$MOMO_TMP/$p/Makefile" ]; then
+      echo "::error::$MOMO_TMP/$p/Makefile 不存在，包无法被索引"
+      exit 1
+    fi
+    rm -rf "$PKG_DIR/$p"
+    cp -r "$MOMO_TMP/$p" "$PKG_DIR/"
+    echo "✅ 已拷贝: $p"
+  done
+
+  rm -rf "$MOMO_TMP"
 fi
 
 # =========================================================
