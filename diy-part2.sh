@@ -447,15 +447,23 @@ fi
 # =============================================================
 # 临时修复：immortalwrt/packages 的 miniupnpd 补丁与 2.3.11 不兼容
 # 2026-10-16 immortalwrt 合并上游（dd29469）把 miniupnpd 从 2.3.9 升到 2.3.11，
-# 但自带的 020-descr-filter-fix.patch（2025 年写的权限解析器重写）打不上，
-# 导致 package/feeds/packages/miniupnpd 编译失败，整个构建挂掉。
-# 该补丁只是权限配置解析的小优化，不影响 UPnP 基本功能，先删掉绕过。
-# 上游修好后可删掉下面这几行。
+# 但自带的旧补丁与 2.3.11 对不上，导致 package/feeds/packages/miniupnpd 编译失败。
+# 经本地实测（补丁逐个打在 2.3.11 源码上）：
+#   - 020-descr-filter-fix.patch：7 个 hunk 失败（改动上游已自带，冗余）
+#   - 030-allow-private-fix.patch：上游已包含，冗余
+#   - 040-improve-logging.patch：miniupnpd.c 上 4 个 hunk 失败
+#   - 010、900 可正常打上，保留。
+# 删掉坏的三个不影响 UPnP 基本功能。上游修好后可删掉下面这几行。
 # =============================================================
-BROKEN_UPNP_PATCH="feeds/packages/net/miniupnpd/patches/020-descr-filter-fix.patch"
-if [ -f "$BROKEN_UPNP_PATCH" ]; then
-  rm -f "$BROKEN_UPNP_PATCH"
-  echo "✅ 已移除不兼容的 miniupnpd 补丁 (020-descr-filter-fix.patch)"
-fi
+for BROKEN_UPNP_PATCH in \
+  "feeds/packages/net/miniupnpd/patches/020-descr-filter-fix.patch" \
+  "feeds/packages/net/miniupnpd/patches/030-allow-private-fix.patch" \
+  "feeds/packages/net/miniupnpd/patches/040-improve-logging.patch" \
+; do
+  if [ -f "$BROKEN_UPNP_PATCH" ]; then
+    rm -f "$BROKEN_UPNP_PATCH"
+    echo "✅ 已移除不兼容/冗余的 miniupnpd 补丁 ($(basename "$BROKEN_UPNP_PATCH"))"
+  fi
+done
 
 echo "🎉 diy-part2.sh 执行完毕 (author=$FW_AUTHOR)"
