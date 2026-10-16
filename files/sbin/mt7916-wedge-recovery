@@ -1,0 +1,231 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# mt7916-wedge-recovery -- MT7916 固件假死自动恢复守护进程
+#
+# 【问题】
+#   MT7916（mt7915e 驱动）运行一段时间后，WM 固件可能触发看门狗崩溃
+#   （内核日志："phy0 indicated firmware crash, attempting recovery"）。
+#   驱动自带的恢复流程（mt7915_mac_full_reset → mt7915_mac_restart →
+#   mt7915_mcu_init_firmware → mt7915_load_firmware）此时永远走不通：
+#     1. "重启 MCU"（mt76_connac_mcu_restart）只是给已死的固件发一条
+#        MCU 命令，固件已死，不会有任何反应；
+#     2. MT7916 的 WFSYS 复位（mt7915_wfsys_reset）只是拨一下
+#        MT_WF_SUBSYS_RST 寄存器，没有任何成功校验，对彻底挂死的
+#        芯片往往不够；
+#     3. 固件重载第一步就要拿补丁信号量（MCU 命令 0x10 PATCH_SEM_CONTROL），
+#        发给死固件永远超时 → "Message 00000010 timeout" →
+#        "Failed to get patch semaphore" → -EAGAIN；
+#     4. 10 次重试全部失败 → "chip full reset failed"，然后
+#        ieee80211_restart_hw 又把整个流程再来一遍 → 无限循环。
+#   驱动从头到尾没有做过一次真正的硬件复位（PCIe FLR / PERST#），
+#   所以 WiFi 彻底丢失，只能重启整机。手动 wifi down/up 也会失败
+#   （hostapd 报 "Could not set interface phy0-ap0 flags (UP): Out of memory"，
+#   因为驱动还卡在假死状态）。
+#
+# 【修复】
+#   本守护进程跟踪系统日志，一旦出现 "chip full reset failed"
+#   （驱动已确认自己救不回来），就对 MT7916 的两个 PCIe 设备
+#   （主 14c3:7906 @ PCIe1，HIF2 14c3:7916 @ PCIe0）做一次 PCI FLR
+#   硬复位。芯片回到干净的复位状态后，驱动正在循环的恢复流程下一次
+#   迭代就能正常重载固件，WiFi 自动回来，无需重启整机。
+#   若平台不支持 FLR（无 reset 节点），则退化为：解绑驱动 → 重绑驱动 →
+#   wifi up，利用 probe 路径的完整初始化再试一次。
+#
+# 【去抖】10 分钟内最多恢复一次，避免反复折腾。
+#
+# 由 /etc/init.d/mt7916-wedge-recovery 以 procd 服务方式启动。
+
+TAG="mt7916-wedge-recovery"
+STATE_DIR="/tmp/mt7916-wedge-recovery"
+LAST_FILE="$STATE_DIR/last_recovery"
+LOG_FILE="$STATE_DIR/recovery.log"
+DEBOUNCE_SEC=600
+
+log() {
+    logger -t "$TAG" "$@"
+    mkdir -p "$STATE_DIR" 2>/dev/null
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE" 2>/dev/null
+}
+
+# 列出本机 MT7916 相关 PCI 设备，每行 "BDF|deviceid"（BDF 本身含冒号，故用 | 分隔）
+# 主设备 14c3:7906（DBDC 时建 phy0+phy1），HIF2 14c3:7916
+find_wifi_devs() {
+    for d in /sys/bus/pci/devices/*; do
+        [ -f "$d/vendor" ] || continue
+        [ -f "$d/device" ] || continue
+        vendor=$(cat "$d/vendor" 2>/dev/null)
+        device=$(cat "$d/device" 2>/dev/null)
+        if [ "$vendor" = "0x14c3" ]; then
+            case "$device" in
+                0x7906|0x7916|0x7915|0x790a)
+                    echo "$(basename "$d")|$device"
+                    ;;
+            esac
+        fi
+    done
+}
+
+# 检查 WiFi 是否恢复：AP 接口存在
+wifi_is_back() {
+    iw dev 2>/dev/null | grep -q "Interface.*-ap0"
+}
+
+# 等待 n 秒，每 5 秒检查一次 WiFi 是否回来
+wait_for_wifi() {
+    total=$1
+    waited=0
+    while [ $waited -lt $total ]; do
+        if wifi_is_back; then
+            return 0
+        fi
+        sleep 5
+        waited=$((waited + 5))
+    done
+    wifi_is_back
+}
+
+do_flr() {
+    # 对所有 MT7916 PCI 设备做 FLR，输出成功复位的设备数
+    n=0
+    for entry in $(find_wifi_devs); do
+        bdf=${entry%%|*}
+        if [ -w "/sys/bus/pci/devices/$bdf/reset" ]; then
+            log "对 $bdf 执行 PCI FLR"
+            if echo 1 > "/sys/bus/pci/devices/$bdf/reset" 2>/dev/null; then
+                log "$bdf FLR 成功"
+                n=$((n + 1))
+            else
+                log "$bdf FLR 失败"
+            fi
+            sleep 1
+        else
+            log "$bdf 无 reset 节点，跳过硬复位"
+        fi
+    done
+    echo $n
+}
+
+do_rebind() {
+    # 解绑 → 重绑（HIF2 先绑，主设备后绑；主设备 probe 时要从 hif_list 找 HIF2）
+    devs=$(find_wifi_devs)
+    if [ -z "$devs" ]; then
+        log "未找到 MT7916 PCI 设备"
+        return 1
+    fi
+
+    hif2=""
+    primary=""
+    for entry in $devs; do
+        bdf=${entry%%|*}
+        dev=${entry##*|}
+        case "$dev" in
+            0x7916|0x790a) hif2="$hif2 $bdf" ;;
+            *) primary="$primary $bdf" ;;
+        esac
+    done
+
+    for bdf in $hif2 $primary; do
+        for drv in /sys/bus/pci/drivers/mt7915e_hif /sys/bus/pci/drivers/mt7915e; do
+            if [ -e "$drv/$bdf" ]; then
+                log "解绑 $bdf（$(basename $drv)）"
+                echo "$bdf" > "$drv/unbind" 2>/dev/null || log "解绑 $bdf 失败"
+            fi
+        done
+    done
+    sleep 3
+
+    for bdf in $hif2; do
+        log "绑定 HIF2 $bdf -> mt7915e_hif"
+        echo "$bdf" > /sys/bus/pci/drivers/mt7915e_hif/bind 2>/dev/null || log "绑定 $bdf 失败"
+        sleep 1
+    done
+    for bdf in $primary; do
+        log "绑定主设备 $bdf -> mt7915e"
+        echo "$bdf" > /sys/bus/pci/drivers/mt7915e/bind 2>/dev/null || log "绑定 $bdf 失败"
+        sleep 1
+    done
+    return 0
+}
+
+# 崩溃现场快照：保存 dmesg、WiFi 温度、接口状态，供事后分析真正的崩溃诱因
+save_diagnostics() {
+    snap="$STATE_DIR/crash-$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$snap" 2>/dev/null
+    dmesg > "$snap/dmesg.txt" 2>/dev/null
+    iw dev > "$snap/iw-dev.txt" 2>/dev/null
+    iw phy phy0 info > "$snap/phy0-info.txt" 2>/dev/null
+    iw phy phy1 info > "$snap/phy1-info.txt" 2>/dev/null
+    for t in /sys/class/thermal/thermal_zone*/temp; do
+        [ -r "$t" ] && echo "$t: $(cat $t 2>/dev/null)"
+    done > "$snap/thermal.txt" 2>/dev/null
+    for p in /sys/class/ieee80211/phy*/device/hwmon/hwmon*/temp*_input; do
+        [ -r "$p" ] && echo "$p: $(cat $p 2>/dev/null)"
+    done > "$snap/wifi-temp.txt" 2>/dev/null
+    uptime > "$snap/uptime.txt" 2>/dev/null
+    log "崩溃快照已保存到 $snap"
+    # 只保留最近 5 次快照，避免 /tmp 被塞满
+    ls -dt "$STATE_DIR"/crash-* 2>/dev/null | tail -n +6 | xargs -r rm -rf
+}
+
+do_recovery() {
+    now=$(date +%s)
+    last=$(cat "$LAST_FILE" 2>/dev/null || echo 0)
+    if [ $((now - last)) -lt $DEBOUNCE_SEC ]; then
+        log "去抖：上次恢复在 $((now - last)) 秒前，跳过"
+        return 0
+    fi
+    echo "$now" > "$LAST_FILE"
+
+    log "检测到 MT7916 固件假死（chip full reset failed），开始恢复"
+
+    save_diagnostics
+
+    # 第一招：PCI FLR 硬复位，让驱动正在循环的恢复流程下一次迭代成功
+    n=$(do_flr)
+    if [ "$n" -gt 0 ]; then
+        log "已对 $n 个设备做 FLR，等待驱动恢复（90s）..."
+        if wait_for_wifi 90; then
+            log "恢复成功：FLR 后 AP 接口已回来"
+            return 0
+        fi
+        log "FLR 后 90s WiFi 仍未回来，尝试第二招"
+    else
+        log "无可用 FLR，直接尝试第二招"
+    fi
+
+    # 第二招：解绑/重绑驱动，走完整 probe 初始化
+    wifi down >/dev/null 2>&1 || true
+    sleep 2
+    if do_rebind; then
+        log "重绑完成，等待驱动初始化（60s）..."
+        sleep 20
+        log "执行 wifi up"
+        wifi up >/dev/null 2>&1 || wifi reload >/dev/null 2>&1 || true
+        if wait_for_wifi 60; then
+            log "恢复成功：重绑后 AP 接口已回来"
+            return 0
+        fi
+    fi
+
+    log "自动恢复失败，WiFi 仍未回来，可能需要重启整机。日志：$LOG_FILE"
+    return 1
+}
+
+log "守护进程启动（去抖 ${DEBOUNCE_SEC}s，状态目录 $STATE_DIR）"
+
+# 启动时先扫一遍已有内核日志：若本机已处于假死循环，立即处理一次
+if dmesg 2>/dev/null | tail -50 | grep -q "chip full reset failed"; then
+    log "启动时发现已有假死记录，立即尝试恢复"
+    do_recovery
+fi
+
+# 跟踪系统日志（含内核消息），捕获驱动宣告放弃的瞬间
+logread -f 2>/dev/null | while read -r line; do
+    case "$line" in
+        *"chip full reset failed"*)
+            log "捕获到假死特征"
+            do_recovery
+            ;;
+    esac
+done

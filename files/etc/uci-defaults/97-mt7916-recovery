@@ -1,0 +1,24 @@
+#!/bin/sh
+# 启用 MT7916 固件假死自动恢复服务
+#
+# 背景见 /sbin/mt7916-wedge-recovery 头部注释。
+# uci-defaults 由 /etc/init.d/boot 以 source 方式执行，执行完自动删除。
+
+if [ -f /sbin/mt7916-wedge-recovery ]; then
+    chmod +x /sbin/mt7916-wedge-recovery
+    logger -t mt7916-recovery "守护进程权限已确认"
+else
+    logger -t mt7916-recovery "警告：/sbin/mt7916-wedge-recovery 不存在，自动恢复不生效"
+fi
+
+if [ -f /etc/init.d/mt7916-wedge-recovery ]; then
+    chmod +x /etc/init.d/mt7916-wedge-recovery
+    /etc/init.d/mt7916-wedge-recovery enable
+    logger -t mt7916-recovery "已启用 mt7916-wedge-recovery 服务（下次开机自动启动）"
+    # 首次刷机立即启动，不用等下次重启
+    /etc/init.d/mt7916-wedge-recovery start
+else
+    logger -t mt7916-recovery "警告：/etc/init.d/mt7916-wedge-recovery 不存在"
+fi
+
+exit 0
