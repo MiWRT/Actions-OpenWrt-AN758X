@@ -25,11 +25,11 @@ mkdir -p "$PKG_DIR"
 # ---------------------------------------------------------
 # 插件开关（M1：只开验证需要的 4 组；Nikki 已关，改用 Momo）
 # ---------------------------------------------------------
-ADD_NIKKI=false     # Nikki：透明代理（mihomo 内核）——已关闭，改用 Momo
+ADD_NIKKI=true      # Nikki：透明代理（mihomo 内核）——已关闭，改用 Momo
                     #   ├─ luci-app-nikki   LuCI 界面（config 里 =y 的就是它）
                     #   ├─ nikki           核心脚本包（被 luci-app-nikki 依赖自动拉入）
                     #   └─ mihomo-meta     提供 mihomo（nikki DEPENDS 的 +mihomo，默认变体）
-ADD_MOMO=true       # Momo：透明代理（sing-box 内核，与 Nikki 同作者 nikkinikki-org）
+ADD_MOMO=false      # Momo：透明代理（sing-box 内核，与 Nikki 同作者 nikkinikki-org）
                     #   ├─ luci-app-momo   LuCI 界面（config 里 =y 的就是它）
                     #   ├─ momo           核心脚本包（被 luci-app-momo 依赖自动拉入）
                     #   └─ sing-box       代理内核（momo DEPENDS 的 +sing-box，由 feeds/packages 提供，无需拉源码）
