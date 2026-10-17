@@ -4,9 +4,9 @@
 # 运行目录: ponwrt 源码根目录（feeds 安装之后、加载 .config 之前）
 # 由 workflow 在 diy-part1.sh 之后调用。
 #
-# M1 分支版：Momo / EasyTier / Harbor File Pro / PartExp
+# M1 分支版：Nikki / EasyTier / Harbor File Pro / PartExp
 #   + Aurora 主题 + Dufs（默认不编，保留选项）
-#   Nikki 已关闭（改用 Momo），见 ADD_NIKKI=false
+#   Momo 已关闭（改用 Nikki），见 ADD_MOMO=false
 #
 # configs/<机型>.config 里对应包 =y 的那几行指的就是本脚本。
 # 本脚本缺失时，config 里勾了 =y 的包没有任何源码来源，
@@ -23,9 +23,9 @@ PKG_DIR="package/custom"
 mkdir -p "$PKG_DIR"
 
 # ---------------------------------------------------------
-# 插件开关（M1：只开验证需要的 4 组；Nikki 已关，改用 Momo）
+# 插件开关（M1：只开验证需要的 4 组；Momo 已关，改用 Nikki）
 # ---------------------------------------------------------
-ADD_NIKKI=true      # Nikki：透明代理（mihomo 内核）——已关闭，改用 Momo
+ADD_NIKKI=true      # Nikki：透明代理（mihomo 内核）
                     #   ├─ luci-app-nikki   LuCI 界面（config 里 =y 的就是它）
                     #   ├─ nikki           核心脚本包（被 luci-app-nikki 依赖自动拉入）
                     #   └─ mihomo-meta     提供 mihomo（nikki DEPENDS 的 +mihomo，默认变体）
