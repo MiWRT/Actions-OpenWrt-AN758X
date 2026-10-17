@@ -26,10 +26,10 @@ SYS_HOSTNAME="${SYS_HOSTNAME:-PonWRT}"       # 默认主机名（LuCI 状态页�
 WIFI_5G_COUNTRY="${WIFI_5G_COUNTRY:-CN}"       # 国家代码（CN = 中国）
 WIFI_2G_SSID="${WIFI_2G_SSID:-Moto}"            # 2.4G 默认 SSID
 WIFI_2G_KEY="${WIFI_2G_KEY:-arzin1122}"         # 2.4G 默认密码
-WIFI_2G_CHANNEL="${WIFI_2G_CHANNEL:-3}"         # 2.4G 默认信道
+WIFI_2G_CHANNEL="${WIFI_2G_CHANNEL:-1}"         # 2.4G 默认信道
 WIFI_5G_SSID="${WIFI_5G_SSID:-Moto_5G}"         # 5G 默认 SSID
 WIFI_5G_KEY="${WIFI_5G_KEY:-arzin1122}"         # 5G 默认密码
-WIFI_5G_CHANNEL="${WIFI_5G_CHANNEL:-40}"      # 5G 默认信道
+WIFI_5G_CHANNEL="${WIFI_5G_CHANNEL:-36}"      # 5G 默认信道
 WIFI_5G_HTMODE="${WIFI_5G_HTMODE:-HE160}"      # 160MHz（WiFi6）；回落 HE80
 WIFI_5G_FALLBACK="${WIFI_5G_FALLBACK:-HE80}"   # 硬件不支持 160MHz 时的回落值
 
