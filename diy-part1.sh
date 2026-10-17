@@ -233,8 +233,26 @@ if [ "$ADD_MOSDNS" = "true" ]; then
 fi
 
 # --- lucky ---
+# 注意：sirpdboy/luci-app-lucky 仓库是嵌套结构，真正的包在子目录里：
+#   luci-app-lucky/luci-app-lucky/  → LuCI 界面（PKG_NAME:=luci-app-lucky，依赖 +lucky）
+#   luci-app-lucky/lucky/           → 核心二进制（PKG_NAME:=lucky）
+# 必须把两个子目录分别挪到 package/custom/ 下，否则 defconfig 找不到包。
 if [ "$ADD_LUCKY" = "true" ]; then
-  clone https://github.com/sirpdboy/luci-app-lucky "$PKG_DIR/luci-app-lucky" main
+  LUCKY_TMP="$(mktemp -d)/lucky-src"
+  if ! clone https://github.com/sirpdboy/luci-app-lucky "$LUCKY_TMP" main; then
+    echo "::error::luci-app-lucky 拉取失败"
+    exit 1
+  fi
+  for p in lucky luci-app-lucky; do
+    if [ ! -f "$LUCKY_TMP/$p/Makefile" ]; then
+      echo "::error::$LUCKY_TMP/$p/Makefile 不存在，包无法被索引"
+      exit 1
+    fi
+    rm -rf "$PKG_DIR/$p"
+    cp -r "$LUCKY_TMP/$p" "$PKG_DIR/"
+    echo "✅ 已拷贝: $p"
+  done
+  rm -rf "$(dirname "$LUCKY_TMP")"
 fi
 
 # --- tailscale ---
